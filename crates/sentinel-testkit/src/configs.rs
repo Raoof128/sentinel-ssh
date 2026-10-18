@@ -16,6 +16,7 @@ pub struct TestDirs {
 
 impl TestDirs {
     pub fn new() -> Self {
+        crate::init_tracing();
         Self {
             state: tempfile::tempdir().expect("state tempdir"),
             run: tempfile::Builder::new()

@@ -188,3 +188,107 @@ fn private_dir_is_created_0700_and_rejects_unsafe_dirs() {
     write_private(&file, "x");
     assert_eq!(ensure_private_dir(&file).unwrap_err().code, ErrorCode::ConfigInvalid);
 }
+
+fn rejects(f: &Fx, toml: &str, needle: &str) {
+    let e = f.load(toml).unwrap_err();
+    assert_eq!(e.code, ErrorCode::ConfigInvalid, "{toml}");
+    assert!(e.message.contains(needle), "expected {needle:?} in {:?}", e.message);
+}
+
+#[test]
+fn every_inventory_field_is_validated() {
+    let f = fx();
+    let m = f.minimal();
+    rejects(
+        &f,
+        &m.replace("schema_version = 1", "schema_version = 2"),
+        "unsupported schema_version 2",
+    );
+    rejects(
+        &f,
+        &m.replace("address = \"203.0.113.10\"", "address = \"-oProxyCommand=sh\""),
+        "invalid address",
+    );
+    rejects(&f, &m.replace("user = \"sentinel-observer\"", "user = \"a b\""), "invalid user");
+    rejects(
+        &f,
+        &m.replace("[hosts.roots.app]", "[hosts.roots.\"bad alias\"]"),
+        "invalid root alias",
+    );
+    rejects(
+        &f,
+        &m.replace("read = true\nexport = true", "read = false\nexport = true"),
+        "export requires read = true",
+    );
+    rejects(
+        &f,
+        &m.replace("[hosts.log_sources.api]", "[hosts.log_sources.\"a/b\"]"),
+        "invalid log source id",
+    );
+    rejects(
+        &f,
+        &m.replace("[hosts.health_checks.api_http]", "[hosts.health_checks.\"x y\"]"),
+        "invalid health check id",
+    );
+    rejects(
+        &f,
+        &m.replace("http://127.0.0.1:8080/health", "file:///etc/passwd"),
+        "url must be http(s)",
+    );
+    rejects(&f, &m.replace("timeout_secs = 5", "timeout_secs = 0"), "timeout 1-60 s");
+    rejects(&f, &m.replace("ssh-ed25519 AAAA", "ssh-dss AAAA"), "unsupported key type 'ssh-dss'");
+    rejects(&f, &m.replace("id = \"raouf\"", "id = \"Not Valid\""), "principal.id");
+}
+
+#[test]
+fn runtime_dir_too_long_for_a_control_socket_is_rejected() {
+    let f = fx();
+    let long = format!("/tmp/{}", "d".repeat(80));
+    let toml = f.minimal().replace(
+        &format!("runtime_dir = \"{}\"", f.dirs.run.path().join("r").display()),
+        &format!("runtime_dir = \"{long}\""),
+    );
+    rejects(&f, &toml, "too long for an SSH ControlPath socket");
+}
+
+#[test]
+fn service_active_health_check_is_accepted() {
+    let f = fx();
+    let toml = f.minimal() + "\n[hosts.health_checks.api_active]\nkind = \"service_active\"\nservice = \"api\"\n";
+    assert!(f.load(&toml).is_ok());
+}
+
+#[test]
+fn gateway_paths_default_under_home() {
+    let f = fx();
+    let m = f.minimal();
+    let start = m.find("artifact_dir").unwrap();
+    let end = m.find("[principal]").unwrap();
+    let toml = format!("{}\n{}", &m[..start], &m[end..]);
+    let c = f.load(&toml).unwrap();
+    let home = std::env::var("HOME").unwrap();
+    assert_eq!(
+        c.gateway.artifact_dir,
+        PathBuf::from(&home).join(".local/share/sentinel-ssh/artifacts")
+    );
+    assert_eq!(c.gateway.runtime_dir, PathBuf::from(&home).join(".local/state/sentinel-ssh/run"));
+    assert_eq!(c.gateway.ssh_binary, PathBuf::from("/usr/bin/ssh"));
+}
+
+#[test]
+fn files_and_dirs_owned_by_another_user_are_rejected() {
+    // /etc/hosts and /usr are root-owned on every supported gateway platform.
+    let e = load_config(Path::new("/etc/hosts")).unwrap_err();
+    assert!(e.message.contains("owned by the current user"), "{}", e.message);
+    let e = sentinel_gateway::config::ensure_private_dir(Path::new("/usr")).unwrap_err();
+    assert!(e.message.contains("owned by the current user"), "{}", e.message);
+}
+
+#[test]
+fn tilde_paths_expand_and_others_do_not() {
+    use sentinel_gateway::config::expand_tilde;
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    assert_eq!(expand_tilde(Path::new("~/x")), home.join("x"));
+    assert_eq!(expand_tilde(Path::new("/abs/x")), PathBuf::from("/abs/x"));
+    assert_eq!(expand_tilde(Path::new("~other/x")), PathBuf::from("~other/x"));
+}

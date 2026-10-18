@@ -12,3 +12,4 @@ sentinel-gateway = { version = "0.1.0", path = "../sentinel-gateway" }
 tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["rt", "sync", "time", "io-util"] }
 tokio-util = "0.7.20"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }

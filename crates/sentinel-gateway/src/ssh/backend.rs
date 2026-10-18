@@ -31,8 +31,8 @@ pub struct StreamBudget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitKind {
     Code(i32),
+    /// Terminated by this signal number.
     Signal(i32),
-    Killed,
 }
 
 #[derive(Debug, Clone)]

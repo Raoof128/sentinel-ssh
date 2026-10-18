@@ -32,3 +32,11 @@ fn ids_serialise_as_plain_strings() {
     assert_eq!(back, h);
     assert!(serde_json::from_str::<HostId>("\"BAD\"").is_err(), "deserialisation validates");
 }
+
+#[test]
+fn ids_parse_via_from_str() {
+    let h: HostId = "staging-1".parse().unwrap();
+    assert_eq!(h.to_string(), "staging-1");
+    assert!("Bad Host".parse::<HostId>().is_err());
+    assert!("op_xyz".parse::<OperationId>().is_err());
+}

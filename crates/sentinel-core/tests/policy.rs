@@ -203,3 +203,33 @@ fn decision_into_result() {
         ErrorCode::ApprovalRequired
     );
 }
+
+#[test]
+fn owner_resources_allow_only_read_and_control() {
+    let me = observer();
+    assert!(matches!(
+        engine().evaluate(&me, None, &ResourceRef::Artifact { owner: &me.id }, Effect::Export),
+        Decision::Deny { .. }
+    ));
+}
+
+#[test]
+fn export_of_unknown_root_is_denied() {
+    let d = engine().evaluate(&observer(), Some(&h("h1")), &ResourceRef::Root("nope"), Effect::Export);
+    assert_eq!(
+        d,
+        Decision::Deny {
+            reason: "unknown root 'nope'".into()
+        }
+    );
+}
+
+#[test]
+fn control_on_host_resources_is_denied() {
+    for r in [ResourceRef::Root("app"), ResourceRef::Host, ResourceRef::Service("api")] {
+        assert!(matches!(
+            engine().evaluate(&observer(), Some(&h("h1")), &r, Effect::Control),
+            Decision::Deny { .. }
+        ));
+    }
+}

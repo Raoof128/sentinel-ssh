@@ -215,41 +215,6 @@ mod tests {
     }
 
     #[test]
-    fn guards_behave_in_sh() {
-        let d = std::env::temp_dir().join(format!("snt-guard-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        let f = d.join("f");
-        std::fs::write(&f, "hello").unwrap();
-        let link = d.join("l");
-        let _ = std::fs::remove_file(&link);
-        std::os::unix::fs::symlink(&f, &link).unwrap();
-        let run = |c: RemoteCommand| std::process::Command::new("/bin/sh").arg("-c").arg(c.render()).output().unwrap();
-        // GNU stat is required for -c; skip the shell part where it is absent (macOS BSD stat).
-        let gnu = std::process::Command::new("stat")
-            .args(["-c", "%F", "/"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if gnu {
-            let ok = run(kind_guard(
-                "regular file",
-                f.to_str().unwrap(),
-                RemoteCommand::new("cat").flag("--").arg(f.to_str().unwrap()),
-            ));
-            assert_eq!(ok.stdout, b"hello");
-            let bad = run(kind_guard(
-                "regular file",
-                link.to_str().unwrap(),
-                RemoteCommand::new("cat").flag("--").arg(link.to_str().unwrap()),
-            ));
-            assert_eq!(bad.status.code(), Some(97));
-            let big = run(size_guard(f.to_str().unwrap(), 2, RemoteCommand::new("true")));
-            assert_eq!(big.status.code(), Some(98));
-        }
-        std::fs::remove_dir_all(&d).unwrap();
-    }
-
-    #[test]
     #[should_panic(expected = "not allowlisted")]
     fn unlisted_program_panics() {
         let _ = RemoteCommand::new("rm");

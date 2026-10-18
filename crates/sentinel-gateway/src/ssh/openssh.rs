@@ -47,11 +47,8 @@ impl HostConfig {
 
 fn exit_kind(s: ExitStatus) -> ExitKind {
     use std::os::unix::process::ExitStatusExt;
-    match (s.code(), s.signal()) {
-        (Some(c), _) => ExitKind::Code(c),
-        (None, Some(sig)) => ExitKind::Signal(sig),
-        _ => ExitKind::Killed,
-    }
+    // On Unix a finished child has either an exit code or a terminating signal.
+    s.code().map_or_else(|| ExitKind::Signal(s.signal().unwrap_or(0)), ExitKind::Code)
 }
 
 type Shared = Arc<Mutex<(Vec<u8>, bool)>>;
