@@ -262,6 +262,8 @@ async fn disk_usage_is_root_scoped() {
     let ctx = ctx_with(fake.clone());
     let e = ssh_disk_usage(&ctx, du("h1", "app", Some("data"))).await.unwrap();
     assert!(fake.calls()[0].contains("-- '/srv/app/data'"), "{}", fake.calls()[0]);
+    // e2e finding: `du -d N` lists only directories; -a is needed for files.
+    assert!(fake.calls()[0].contains("du -x -P -a -B1"), "{}", fake.calls()[0]);
     assert_eq!(e.data.entries[0].path, "data/blob.bin");
     assert_eq!(e.data.entries[0].bytes, 1_048_576);
     assert_eq!(e.data.total_bytes, 1_052_672);

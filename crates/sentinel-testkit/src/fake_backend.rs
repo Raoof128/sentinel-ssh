@@ -67,6 +67,13 @@ impl FakeBackend {
         let rendered = cmd.render();
         let mut g = self.inner.lock().unwrap();
         g.calls.push(rendered.clone());
+        // Mirror the OS: a process argument cannot contain NUL, so the real backend could never dispatch this.
+        if rendered.contains('\0') {
+            return Err(SentinelError::new(
+                ErrorCode::ConnectionFailed,
+                "fake: command contains a NUL byte and cannot be passed to ssh",
+            ));
+        }
         if let Some(code) = g.fail {
             return Err(SentinelError::new(code, "fake: connection failure"));
         }

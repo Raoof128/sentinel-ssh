@@ -3,3 +3,4 @@
 pub mod configs;
 pub mod ctx;
 pub mod fake_backend;
+pub mod fixture;

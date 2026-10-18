@@ -109,6 +109,9 @@ pub struct FilesListData {
     pub content_trust: &'static str,
 }
 
+/// GNU find expands `\t` and `\0` itself; a real NUL byte cannot be passed in a process argument.
+const FIND_FORMAT: &str = r"%y\t%s\t%T@\t%m\t%f\0";
+
 /// Parses NUL-terminated `%y\t%s\t%T@\t%m\t%f` records. Names may contain any byte except NUL and '/'.
 pub fn parse_find(run: &ToolRun, out: &[u8]) -> Vec<(String, FileEntry)> {
     out.split(|b| *b == 0)
@@ -149,7 +152,7 @@ pub async fn ssh_files_list(ctx: &AppContext, p: FilesListParams) -> Result<Resu
                 .flag("-maxdepth")
                 .num(1)
                 .flag("-printf")
-                .arg("%y\t%s\t%T@\t%m\t%f\0");
+                .arg(FIND_FORMAT);
             let out = run.run_guarded("directory", &target.absolute, find).await?;
             let mut all = parse_find(&run, &out.stdout);
             all.sort_by(|a, b| a.0.cmp(&b.0));

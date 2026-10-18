@@ -104,6 +104,8 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
                     RemoteCommand::new("du")
                         .flag("-x")
                         .flag("-P")
+                        // Without -a, `du -d N` lists directories only and files never appear.
+                        .flag("-a")
                         .flag("-B1")
                         .flag("-d")
                         .num(depth as u64)
