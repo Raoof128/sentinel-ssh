@@ -1,0 +1,139 @@
+---
+source: crates/sentinel-core/tests/error_contract.rs
+expression: "schemars::schema_for!(SentinelError)"
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SentinelError",
+  "type": "object",
+  "properties": {
+    "code": {
+      "$ref": "#/$defs/ErrorCode"
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "message": {
+      "type": "string"
+    },
+    "operation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "retry": {
+      "$ref": "#/$defs/RetryStrategy"
+    }
+  },
+  "required": [
+    "code",
+    "message",
+    "retry"
+  ],
+  "$defs": {
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "HOST_KEY_CHANGED",
+        "POLICY_DENIED",
+        "APPROVAL_REQUIRED",
+        "STALE_PLAN",
+        "CAPABILITY_UNSUPPORTED",
+        "OUTCOME_UNKNOWN",
+        "BUDGET_EXCEEDED",
+        "RESUME_UNVERIFIABLE",
+        "DESTINATION_EXISTS",
+        "DIGEST_MISMATCH",
+        "SYNC_CONFLICT",
+        "ARTIFACT_EXPIRED",
+        "SOURCE_CHANGED",
+        "DISK_FULL",
+        "TRANSFER_TIMEOUT_IDLE",
+        "TRANSFER_TIMEOUT_TOTAL",
+        "TRANSFER_PARTIAL",
+        "EXPORT_NOT_ALLOWED",
+        "INVALID_INPUT",
+        "NOT_FOUND",
+        "TIMEOUT",
+        "CONNECTION_FAILED",
+        "AUTHENTICATION_FAILED",
+        "REMOTE_FAILURE",
+        "NOT_UTF8",
+        "CONFIG_INVALID",
+        "INTERNAL"
+      ]
+    },
+    "RetryStrategy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "const": "never"
+            }
+          },
+          "required": [
+            "strategy"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "const": "reconcile"
+            }
+          },
+          "required": [
+            "strategy"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "const": "replan"
+            }
+          },
+          "required": [
+            "strategy"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "const": "narrow_request"
+            }
+          },
+          "required": [
+            "strategy"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "seconds": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "strategy": {
+              "type": "string",
+              "const": "retry_after"
+            }
+          },
+          "required": [
+            "strategy",
+            "seconds"
+          ]
+        }
+      ]
+    }
+  }
+}
