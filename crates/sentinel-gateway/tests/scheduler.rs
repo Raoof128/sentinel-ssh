@@ -167,3 +167,21 @@ fn sweep_removes_old_terminal_operations_only() {
     assert!(ops.get(&me, &done.id).is_err());
     assert!(ops.get(&me, &live.id).is_ok());
 }
+
+/// Security review 2026-10-18: a waiter blocked on a saturated host must not hold a global slot (spec §10.4).
+#[tokio::test]
+async fn saturated_host_waiters_do_not_starve_other_hosts() {
+    let b = Budgets {
+        max_active_operations: 2,
+        per_host_reads: 1,
+        queue_wait_secs: 5,
+        ..Default::default()
+    };
+    let s = Scheduler::new(&b);
+    let _a = s.acquire_read(&h("busy")).await.unwrap();
+    let s2 = s.clone();
+    let _waiter = tokio::spawn(async move { s2.acquire_read(&h("busy")).await.map(|_| ()) });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let other = tokio::time::timeout(Duration::from_millis(500), s.acquire_read(&h("idle"))).await;
+    assert!(other.is_ok(), "a request for an idle host was blocked by a waiter on a busy host");
+}

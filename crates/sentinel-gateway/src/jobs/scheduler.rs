@@ -80,9 +80,10 @@ impl Scheduler {
         }
         let _pending = PendingGuard(&i.pending);
         let host_sem = self.host_semaphore(host);
+        // Host permit first: a waiter blocked on a saturated host must not hold a global slot other hosts need.
         let acquire = async {
-            let g = i.global.clone().acquire_owned().await.expect("semaphore never closed");
             let h = host_sem.acquire_owned().await.expect("semaphore never closed");
+            let g = i.global.clone().acquire_owned().await.expect("semaphore never closed");
             ReadPermit { _global: g, _host: h }
         };
         tokio::time::timeout(i.queue_wait, acquire).await.map_err(|_| {

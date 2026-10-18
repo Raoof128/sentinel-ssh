@@ -40,7 +40,7 @@ expression: s
     "-o",
     "ControlMaster=auto",
     "-o",
-    "ControlPath=<RUN>/r/c-%C",
+    "ControlPath=<RUN>/r/c-<HASH>",
     "-o",
     "ControlPersist=60",
     "-o",

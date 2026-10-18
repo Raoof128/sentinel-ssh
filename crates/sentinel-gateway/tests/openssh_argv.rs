@@ -42,9 +42,13 @@ fn argv_is_fully_controlled() {
     let argv = b.build_argv(&host(&cfg), &RemoteCommand::new("true"));
     let run = dirs.run.path().display().to_string();
     let id = cfg.hosts[0].auth_identity().unwrap().display().to_string();
+    let hash = regex::Regex::new("c-[0-9a-f]{40}").unwrap();
     let s: Vec<String> = argv
         .iter()
-        .map(|a| a.to_string_lossy().replace(&run, "<RUN>").replace(&id, "<ID>"))
+        .map(|a| {
+            hash.replace_all(&a.to_string_lossy().replace(&run, "<RUN>").replace(&id, "<ID>"), "c-<HASH>")
+                .into_owned()
+        })
         .collect();
     let joined = s.join(" ");
     assert_eq!(&s[0..2], ["-F", "/dev/null"]);
@@ -298,4 +302,34 @@ async fn stream_idle_timeout() {
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::TransferTimeoutIdle);
     assert!(t.elapsed() < Duration::from_secs(3));
+}
+
+/// Security review 2026-10-18: `%C` hashes only host/port/user, so a master authenticated under one pinned key or identity
+/// could be reused after either changed, or by a second inventory entry for the same address (spec §9.2).
+#[test]
+fn control_path_binds_trust_identity() {
+    let (_dirs, cfg) = setup();
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let base = host(&cfg);
+    let p0 = b.control_path(&base);
+    assert!(!p0.to_string_lossy().contains('%'), "no OpenSSH tokens: {}", p0.display());
+    assert!(p0.as_os_str().len() <= sentinel_gateway::config::MAX_CONTROL_PATH);
+    let mut other_key = base.clone();
+    other_key.host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOther00".parse().unwrap();
+    let mut other_id = base.clone();
+    other_id.id = sentinel_core::identity::HostId::parse("h2").unwrap();
+    let mut other_identity = base.clone();
+    other_identity.auth = sentinel_gateway::config::AuthConfig::IdentityFile {
+        path: "/tmp/other-id".into(),
+    };
+    for h in [&other_key, &other_id, &other_identity] {
+        assert_ne!(b.control_path(h), p0);
+    }
+    assert_eq!(b.control_path(&base.clone()), p0, "stable for the same trust identity");
+    let argv: Vec<String> = b
+        .build_argv(&base, &RemoteCommand::new("true"))
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(argv.contains(&format!("ControlPath={}", p0.display())));
 }

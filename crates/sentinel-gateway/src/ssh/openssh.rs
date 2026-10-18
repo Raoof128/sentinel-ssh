@@ -147,6 +147,28 @@ impl OpenSshBackend {
         Ok(p)
     }
 
+    /// One multiplexing socket per trust identity: host id, address, port, user, pinned key and credential all feed the name,
+    /// so a changed key or identity never reuses a master authenticated under the old one (spec §9.2). 40 hex chars keeps
+    /// the path inside the ControlPath budget checked at config load.
+    pub fn control_path(&self, host: &HostConfig) -> PathBuf {
+        use sha2::{Digest, Sha256};
+        let cred = match &host.auth {
+            AuthConfig::IdentityFile { path } => format!("identity_file:{}", path.display()),
+            AuthConfig::Agent => "agent".to_owned(),
+        };
+        let material = [
+            host.id.as_str(),
+            &host.address,
+            &host.port.to_string(),
+            &host.user,
+            &host.host_key.to_string(),
+            &cred,
+        ]
+        .join("\0");
+        let digest = hex::encode(Sha256::digest(material.as_bytes()));
+        self.runtime_dir.join(format!("c-{}", &digest[..40]))
+    }
+
     fn options(&self, host: &HostConfig) -> Vec<OsString> {
         let kh = self.known_hosts_path(host);
         let mut o: Vec<OsString> = vec!["-F".into(), "/dev/null".into()];
@@ -171,7 +193,7 @@ impl OpenSshBackend {
         opt("ProxyCommand=none".into());
         opt("RequestTTY=no".into());
         opt("ControlMaster=auto".into());
-        opt(format!("ControlPath={}/c-%C", self.runtime_dir.display()));
+        opt(format!("ControlPath={}", self.control_path(host).display()));
         opt("ControlPersist=60".into());
         opt("LogLevel=ERROR".into());
         if let AuthConfig::IdentityFile { path } = &host.auth {
