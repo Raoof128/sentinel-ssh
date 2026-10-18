@@ -1,0 +1,6964 @@
+---
+source: crates/sentinel-gateway/tests/protocol.rs
+expression: v
+---
+[
+  {
+    "description": "Read a byte range (<=64 KiB) of an artefact you own, such as a download or a truncated result.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        },
+        "Encoding": {
+          "enum": [
+            "utf8",
+            "base64"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "encoding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Encoding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "utf8 (default) or base64."
+        },
+        "length": {
+          "description": "1-65536 bytes, default 8192.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "description": "Byte offset, default 0.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "artifact_id"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_artifact_read",
+    "outputSchema": {
+      "$defs": {
+        "ArtifactOrigin": {
+          "oneOf": [
+            {
+              "properties": {
+                "host_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "remote_file",
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "root": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "host_id",
+                "root",
+                "path"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "tool_result",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "operation_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ArtifactReadData": {
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactRecord"
+            },
+            "bytes_returned": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "content": {
+              "type": "string"
+            },
+            "content_trust": {
+              "type": "string"
+            },
+            "encoding": {
+              "$ref": "#/$defs/Encoding"
+            },
+            "eof": {
+              "type": "boolean"
+            },
+            "offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact",
+            "offset",
+            "bytes_returned",
+            "eof",
+            "encoding",
+            "content",
+            "content_trust"
+          ],
+          "type": "object"
+        },
+        "ArtifactRecord": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "content_kind": {
+              "$ref": "#/$defs/ContentKind"
+            },
+            "created_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "origin": {
+              "$ref": "#/$defs/ArtifactOrigin"
+            },
+            "owner": {
+              "type": "string"
+            },
+            "sha256": {
+              "description": "Lowercase hex SHA-256 of the stored bytes.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "owner",
+            "origin",
+            "bytes",
+            "sha256",
+            "content_kind",
+            "created_at",
+            "expires_at"
+          ],
+          "type": "object"
+        },
+        "ContentKind": {
+          "enum": [
+            "utf8_text",
+            "binary",
+            "json"
+          ],
+          "type": "string"
+        },
+        "Encoding": {
+          "enum": [
+            "utf8",
+            "base64"
+          ],
+          "type": "string"
+        },
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactReadData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Run up to 16 typed read tools in one call; each item is separately authorised and reports its own success or error.",
+    "inputSchema": {
+      "$defs": {
+        "BatchItem": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "description": "Caller-chosen id, unique in the batch: ^[A-Za-z0-9_-]{1,32}$.",
+              "type": "string"
+            },
+            "params": {
+              "default": null,
+              "description": "That tool's parameters."
+            },
+            "tool": {
+              "description": "One of the batchable read tools.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "tool"
+          ],
+          "type": "object"
+        },
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "items": {
+          "description": "1-16 items.",
+          "items": {
+            "$ref": "#/$defs/BatchItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_batch_inspect",
+    "outputSchema": {
+      "$defs": {
+        "BatchInspectData": {
+          "properties": {
+            "error_count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/BatchItemResult"
+              },
+              "type": "array"
+            },
+            "ok_count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "items",
+            "ok_count",
+            "error_count"
+          ],
+          "type": "object"
+        },
+        "BatchItemResult": {
+          "oneOf": [
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "const": "ok",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "id",
+                "result"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "error": {
+                  "$ref": "#/$defs/SentinelError"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "status": {
+                  "const": "error",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "id",
+                "error"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BatchInspectData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Describe this gateway's backend, limits, protocol versions and guarantees, including the weaker observer-mode guarantees.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_id": {
+          "description": "Also describe this host.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "ssh_capabilities_get",
+    "outputSchema": {
+      "$defs": {
+        "BackendCapabilities": {
+          "properties": {
+            "connection_reuse": {
+              "type": "boolean"
+            },
+            "host_key_pinning": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string"
+            },
+            "remote_termination": {
+              "$ref": "#/$defs/RemoteTermination"
+            }
+          },
+          "required": [
+            "name",
+            "host_key_pinning",
+            "remote_termination",
+            "connection_reuse"
+          ],
+          "type": "object"
+        },
+        "Budgets": {
+          "additionalProperties": false,
+          "description": "Initial design defaults from spec §11.3. Not proven optimal; adjust through a measured process.",
+          "properties": {
+            "artifact_retention_hours": {
+              "default": 24,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "connect_timeout_secs": {
+              "default": 10,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "default_result_bytes": {
+              "default": 8192,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_active_operations": {
+              "default": 64,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_batch_items": {
+              "default": 16,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_pending_operations": {
+              "default": 128,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_result_bytes": {
+              "default": 65536,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_transfer_bytes": {
+              "default": 268435456,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "per_host_reads": {
+              "default": 4,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "queue_wait_secs": {
+              "default": 5,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "read_timeout_secs": {
+              "default": 30,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "transfer_chunk_bytes": {
+              "default": 65536,
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "transfer_idle_timeout_secs": {
+              "default": 30,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "transfer_total_timeout_secs": {
+              "default": 600,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "CapabilitiesData": {
+          "properties": {
+            "backend": {
+              "$ref": "#/$defs/BackendCapabilities"
+            },
+            "gateway_version": {
+              "type": "string"
+            },
+            "guarantees": {
+              "$ref": "#/$defs/Guarantees"
+            },
+            "host": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HostSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limits": {
+              "$ref": "#/$defs/Budgets"
+            },
+            "mode": {
+              "type": "string"
+            },
+            "protocol_versions": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "schema_version": {
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "gateway_version",
+            "schema_version",
+            "protocol_versions",
+            "mode",
+            "backend",
+            "guarantees",
+            "tools",
+            "limits"
+          ],
+          "type": "object"
+        },
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "Guarantees": {
+          "properties": {
+            "remote_enforcement": {
+              "description": "False in observer mode: the SSH account itself is not restricted by the gateway.",
+              "type": "boolean"
+            },
+            "remote_termination": {
+              "$ref": "#/$defs/RemoteTermination"
+            },
+            "statement": {
+              "type": "string"
+            },
+            "symlink_containment": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "remote_enforcement",
+            "remote_termination",
+            "statement",
+            "symlink_containment"
+          ],
+          "type": "object"
+        },
+        "HostSummary": {
+          "description": "What an agent may know about a host: ids and registered resource names, never addresses, users or keys.",
+          "properties": {
+            "environment": {
+              "type": "string"
+            },
+            "export_roots": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "health_checks": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "host_id": {
+              "type": "string"
+            },
+            "log_sources": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "roots": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "services": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "host_id",
+            "environment",
+            "roots",
+            "export_roots",
+            "services",
+            "log_sources",
+            "health_checks"
+          ],
+          "type": "object"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RemoteTermination": {
+          "description": "Whether a stopped operation is known to have stopped on the remote host (spec §10.3).",
+          "enum": [
+            "confirmed",
+            "unconfirmed",
+            "unknown",
+            "not_applicable"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapabilitiesData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Report filesystem capacity and directory usage inside a registered root, with depth (<=3) and entry (<=200) caps.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "description": "1-3, default 1.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "max_entries": {
+          "description": "1-200, default 50.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Path relative to the root; default the root itself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "description": "A root alias from `ssh_hosts_list`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "root"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_disk_usage",
+    "outputSchema": {
+      "$defs": {
+        "DiskEntry": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "path": {
+              "description": "Relative to the root alias.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        "DiskUsageData": {
+          "properties": {
+            "entries": {
+              "description": "Largest first, excluding the requested path itself.",
+              "items": {
+                "$ref": "#/$defs/DiskEntry"
+              },
+              "type": "array"
+            },
+            "entries_truncated": {
+              "type": "boolean"
+            },
+            "filesystem": {
+              "$ref": "#/$defs/FilesystemUsage"
+            },
+            "path": {
+              "type": "string"
+            },
+            "root": {
+              "type": "string"
+            },
+            "total_bytes": {
+              "description": "Usage of the requested path itself.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "root",
+            "path",
+            "filesystem",
+            "total_bytes",
+            "entries",
+            "entries_truncated"
+          ],
+          "type": "object"
+        },
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "FilesystemUsage": {
+          "properties": {
+            "available_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mount": {
+              "type": "string"
+            },
+            "total_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "used_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total_bytes",
+            "used_bytes",
+            "available_bytes",
+            "mount"
+          ],
+          "type": "object"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiskUsageData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "SHA-256 of a regular file inside a readable root, within the transfer size limit.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        },
+        "HashAlgorithm": {
+          "enum": [
+            "sha256"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HashAlgorithm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only sha256."
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "root",
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_file_hash",
+    "outputSchema": {
+      "$defs": {
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "FileHashData": {
+          "properties": {
+            "algorithm": {
+              "$ref": "#/$defs/HashAlgorithm"
+            },
+            "bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "digest": {
+              "description": "Lowercase hex.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "algorithm",
+            "digest",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        "HashAlgorithm": {
+          "enum": [
+            "sha256"
+          ],
+          "type": "string"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileHashData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Read a byte range (<=64 KiB) of a regular file inside a readable root, as UTF-8 or base64.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        },
+        "Encoding": {
+          "enum": [
+            "utf8",
+            "base64"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "encoding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Encoding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "utf8 (default; fails on invalid UTF-8) or base64."
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "length": {
+          "description": "1-65536 bytes, default 8192.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "description": "Byte offset, default 0.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "root",
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_file_read",
+    "outputSchema": {
+      "$defs": {
+        "Encoding": {
+          "enum": [
+            "utf8",
+            "base64"
+          ],
+          "type": "string"
+        },
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "FileReadData": {
+          "properties": {
+            "bytes_returned": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "content": {
+              "type": "string"
+            },
+            "content_trust": {
+              "type": "string"
+            },
+            "encoding": {
+              "$ref": "#/$defs/Encoding"
+            },
+            "eof": {
+              "type": "boolean"
+            },
+            "offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "offset",
+            "bytes_returned",
+            "total_bytes",
+            "eof",
+            "encoding",
+            "content",
+            "content_trust"
+          ],
+          "type": "object"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileReadData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Return type, size, mode, owner, group and mtime of a path inside a root without following a final symlink.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "root",
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_file_stat",
+    "outputSchema": {
+      "$defs": {
+        "EntryKind": {
+          "enum": [
+            "file",
+            "dir",
+            "symlink",
+            "other"
+          ],
+          "type": "string"
+        },
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "FileStatData": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "group": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EntryKind",
+              "description": "Of the path itself; a symlink is reported as `symlink` and its target is not followed or disclosed."
+            },
+            "mode_octal": {
+              "type": "string"
+            },
+            "mtime": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "nlink": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "owner": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "bytes",
+            "mode_octal",
+            "owner",
+            "group",
+            "mtime",
+            "nlink"
+          ],
+          "type": "object"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileStatData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "List a directory inside a registered root, at most 500 entries per page. Refuses symlinked and special targets.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "description": "Continue after this entry name (from `next_cursor`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "max_entries": {
+          "description": "1-500, default 100.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "default": "",
+          "description": "Directory relative to the root; \"\" for the root itself.",
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "root"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_files_list",
+    "outputSchema": {
+      "$defs": {
+        "EntryKind": {
+          "enum": [
+            "file",
+            "dir",
+            "symlink",
+            "other"
+          ],
+          "type": "string"
+        },
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "FileEntry": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "$ref": "#/$defs/EntryKind"
+            },
+            "mode_octal": {
+              "type": "string"
+            },
+            "mtime": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "name": {
+              "description": "Control and bidirectional characters are shown escaped as `\\u{XXXX}`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "bytes",
+            "mtime",
+            "mode_octal"
+          ],
+          "type": "object"
+        },
+        "FilesListData": {
+          "properties": {
+            "content_trust": {
+              "type": "string"
+            },
+            "entries": {
+              "items": {
+                "$ref": "#/$defs/FileEntry"
+              },
+              "type": "array"
+            },
+            "path": {
+              "type": "string"
+            },
+            "root": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "root",
+            "path",
+            "entries",
+            "content_trust"
+          ],
+          "type": "object"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FilesListData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Run an operator-registered health check from the host (HTTP status or service active). Never an arbitrary URL or code.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "description": "A health check id from `ssh_hosts_list`.",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "check_id"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_health_check",
+    "outputSchema": {
+      "$defs": {
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "HealthCheckConfig": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "expect_status": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "kind": {
+                  "const": "http",
+                  "type": "string"
+                },
+                "timeout_secs": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "url",
+                "expect_status",
+                "timeout_secs"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "service_active",
+                  "type": "string"
+                },
+                "service": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "service"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "HealthResult": {
+          "properties": {
+            "check_id": {
+              "type": "string"
+            },
+            "definition": {
+              "$ref": "#/$defs/HealthCheckConfig",
+              "description": "The registered definition, so another observer can repeat the check (spec §6.3)."
+            },
+            "kind": {
+              "type": "string"
+            },
+            "observation": true,
+            "passing": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "check_id",
+            "kind",
+            "passing",
+            "observation",
+            "definition"
+          ],
+          "type": "object"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HealthResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Collect an allowlisted host-facts schema: kernel, architecture, CPUs, load, memory, uptime and OS name.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_host_inspect",
+    "outputSchema": {
+      "$defs": {
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "HostFacts": {
+          "properties": {
+            "arch": {
+              "type": "string"
+            },
+            "cpus": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "hostname": {
+              "type": "string"
+            },
+            "kernel": {
+              "type": "string"
+            },
+            "load_15m": {
+              "format": "double",
+              "type": "number"
+            },
+            "load_1m": {
+              "format": "double",
+              "type": "number"
+            },
+            "load_5m": {
+              "format": "double",
+              "type": "number"
+            },
+            "mem_available_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mem_total_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "os_pretty_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "uptime_seconds": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "hostname",
+            "kernel",
+            "arch",
+            "cpus",
+            "load_1m",
+            "load_5m",
+            "load_15m",
+            "mem_total_bytes",
+            "mem_available_bytes",
+            "uptime_seconds"
+          ],
+          "type": "object"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostFacts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "List visible configured host ids with their environment and registered roots, services, log sources and health checks. Paginated; never returns addresses, users or keys.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "description": "Return hosts after this host_id (from a previous `next_cursor`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "description": "1-100, default 50.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "ssh_hosts_list",
+    "outputSchema": {
+      "$defs": {
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "HostSummary": {
+          "description": "What an agent may know about a host: ids and registered resource names, never addresses, users or keys.",
+          "properties": {
+            "environment": {
+              "type": "string"
+            },
+            "export_roots": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "health_checks": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "host_id": {
+              "type": "string"
+            },
+            "log_sources": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "roots": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "services": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "host_id",
+            "environment",
+            "roots",
+            "export_roots",
+            "services",
+            "log_sources",
+            "health_checks"
+          ],
+          "type": "object"
+        },
+        "HostsListData": {
+          "properties": {
+            "hosts": {
+              "items": {
+                "$ref": "#/$defs/HostSummary"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "hosts"
+          ],
+          "type": "object"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostsListData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Fixed-string search of a registered log source, at most 200 matches, optionally only the last N bytes.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        },
+        "PatternMode": {
+          "oneOf": [
+            {
+              "enum": [
+                "fixed"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "regex",
+              "description": "Not available in v0.1.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "last_bytes": {
+          "description": "Search only the final N bytes (at most 64 MiB). Line numbers are then relative to that window.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_matches": {
+          "description": "1-200, default 50.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pattern": {
+          "description": "Fixed string, 1-256 characters, no control characters.",
+          "type": "string"
+        },
+        "pattern_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PatternMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_id": {
+          "description": "A log source id from `ssh_hosts_list`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "source_id",
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_logs_search",
+    "outputSchema": {
+      "$defs": {
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "LogMatch": {
+          "properties": {
+            "line_no": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "description": "Control characters escaped; cut at 1024 characters.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "line_no",
+            "text"
+          ],
+          "type": "object"
+        },
+        "LogsSearchData": {
+          "properties": {
+            "content_trust": {
+              "type": "string"
+            },
+            "line_numbers_relative_to_tail": {
+              "type": "boolean"
+            },
+            "match_limit_reached": {
+              "type": "boolean"
+            },
+            "matches": {
+              "items": {
+                "$ref": "#/$defs/LogMatch"
+              },
+              "type": "array"
+            },
+            "source_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_id",
+            "matches",
+            "match_limit_reached",
+            "line_numbers_relative_to_tail",
+            "content_trust"
+          ],
+          "type": "object"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogsSearchData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Request cancellation of one of your queued or running operations. Observer mode cannot confirm remote termination.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_operation_cancel",
+    "outputSchema": {
+      "$defs": {
+        "CancelData": {
+          "properties": {
+            "note": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": "string"
+            },
+            "remote_termination": {
+              "$ref": "#/$defs/RemoteTermination"
+            },
+            "state": {
+              "$ref": "#/$defs/OperationState",
+              "description": "`cancel_requested` when the request reached a queued or running operation; otherwise its current terminal state."
+            }
+          },
+          "required": [
+            "operation_id",
+            "state",
+            "remote_termination",
+            "note"
+          ],
+          "type": "object"
+        },
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "OperationState": {
+          "enum": [
+            "received",
+            "authorised",
+            "rejected",
+            "awaiting_approval",
+            "queued",
+            "running",
+            "verifying",
+            "succeeded",
+            "failed",
+            "cancel_requested",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RemoteTermination": {
+          "description": "Whether a stopped operation is known to have stopped on the remote host (spec §10.3).",
+          "enum": [
+            "confirmed",
+            "unconfirmed",
+            "unknown",
+            "not_applicable"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CancelData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Read the state of one of your operations, including whether remote termination was confirmed.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_operation_get",
+    "outputSchema": {
+      "$defs": {
+        "Effect": {
+          "oneOf": [
+            {
+              "const": "read",
+              "description": "No intended remote application mutation.",
+              "type": "string"
+            },
+            {
+              "const": "export",
+              "description": "Moves confidential information to a new trust boundary.",
+              "type": "string"
+            },
+            {
+              "const": "control",
+              "description": "Changes gateway or job state, or stops an owned operation.",
+              "type": "string"
+            },
+            {
+              "const": "plan",
+              "description": "Creates a proposal.",
+              "type": "string"
+            },
+            {
+              "const": "stage",
+              "description": "Writes isolated staging storage.",
+              "type": "string"
+            },
+            {
+              "const": "change",
+              "description": "Can modify an approved remote resource.",
+              "type": "string"
+            }
+          ]
+        },
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "OperationRecord": {
+          "properties": {
+            "created_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "effect": {
+              "$ref": "#/$defs/Effect"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SentinelError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "finished_at": {
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "host_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "principal": {
+              "type": "string"
+            },
+            "remote_termination": {
+              "$ref": "#/$defs/RemoteTermination"
+            },
+            "result_artifact": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "$ref": "#/$defs/OperationState"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "principal",
+            "tool",
+            "effect",
+            "state",
+            "created_at",
+            "updated_at",
+            "remote_termination"
+          ],
+          "type": "object"
+        },
+        "OperationState": {
+          "enum": [
+            "received",
+            "authorised",
+            "rejected",
+            "awaiting_approval",
+            "queued",
+            "running",
+            "verifying",
+            "succeeded",
+            "failed",
+            "cancel_requested",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RemoteTermination": {
+          "description": "Whether a stopped operation is known to have stopped on the remote host (spec §10.3).",
+          "enum": [
+            "confirmed",
+            "unconfirmed",
+            "unknown",
+            "not_applicable"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "List process summaries (pid, user, CPU, memory, elapsed, command) with command-line secrets redacted; at most 200.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        },
+        "ProcessSort": {
+          "enum": [
+            "cpu",
+            "mem",
+            "pid"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "limit": {
+          "description": "1-200, default 50.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProcessSort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "cpu (default), mem or pid."
+        },
+        "user": {
+          "description": "Only processes of this user.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "host_id"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_process_list",
+    "outputSchema": {
+      "$defs": {
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "ProcessListData": {
+          "properties": {
+            "content_trust": {
+              "type": "string"
+            },
+            "processes": {
+              "items": {
+                "$ref": "#/$defs/ProcessSummary"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "processes",
+            "content_trust"
+          ],
+          "type": "object"
+        },
+        "ProcessSummary": {
+          "properties": {
+            "args_redacted": {
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "cpu_percent": {
+              "format": "float",
+              "type": "number"
+            },
+            "elapsed_seconds": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mem_percent": {
+              "format": "float",
+              "type": "number"
+            },
+            "pid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ppid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "user": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pid",
+            "ppid",
+            "user",
+            "cpu_percent",
+            "mem_percent",
+            "elapsed_seconds",
+            "command",
+            "args_redacted"
+          ],
+          "type": "object"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProcessListData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Inspect the systemd state of a registered service id. No arbitrary unit names or systemctl flags.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "service_id": {
+          "description": "A service id from `ssh_hosts_list`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "service_id"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_service_status",
+    "outputSchema": {
+      "$defs": {
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        },
+        "ServiceState": {
+          "properties": {
+            "active_enter_timestamp": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "active_state": {
+              "type": "string"
+            },
+            "load_state": {
+              "type": "string"
+            },
+            "main_pid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "n_restarts": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "result": {
+              "type": "string"
+            },
+            "scope": {
+              "$ref": "#/$defs/UnitScope"
+            },
+            "service_id": {
+              "type": "string"
+            },
+            "sub_state": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "service_id",
+            "unit",
+            "scope",
+            "active_state",
+            "sub_state",
+            "load_state",
+            "result",
+            "main_pid",
+            "n_restarts"
+          ],
+          "type": "object"
+        },
+        "UnitScope": {
+          "enum": [
+            "system",
+            "user"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ServiceState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Download a regular file from an export-permitted root into a private artefact, verified by SHA-256. Bytes never enter model context; returns an artefact handle.",
+    "inputSchema": {
+      "$defs": {
+        "Detail": {
+          "oneOf": [
+            {
+              "const": "concise",
+              "description": "Up to 8 KiB inline (default).",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Up to 64 KiB inline.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_sha256": {
+          "description": "Refuse unless the remote file currently has this SHA-256 (64 hex characters).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "root": {
+          "description": "A root alias with export permission.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "root",
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "ssh_transfer_download",
+    "outputSchema": {
+      "$defs": {
+        "ArtifactOrigin": {
+          "oneOf": [
+            {
+              "properties": {
+                "host_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "remote_file",
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "root": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "host_id",
+                "root",
+                "path"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "tool_result",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "operation_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ErrorCode": {
+          "enum": [
+            "HOST_KEY_CHANGED",
+            "POLICY_DENIED",
+            "APPROVAL_REQUIRED",
+            "STALE_PLAN",
+            "CAPABILITY_UNSUPPORTED",
+            "OUTCOME_UNKNOWN",
+            "BUDGET_EXCEEDED",
+            "RESUME_UNVERIFIABLE",
+            "DESTINATION_EXISTS",
+            "DIGEST_MISMATCH",
+            "SYNC_CONFLICT",
+            "ARTIFACT_EXPIRED",
+            "SOURCE_CHANGED",
+            "DISK_FULL",
+            "TRANSFER_TIMEOUT_IDLE",
+            "TRANSFER_TIMEOUT_TOTAL",
+            "TRANSFER_PARTIAL",
+            "EXPORT_NOT_ALLOWED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+            "TIMEOUT",
+            "CONNECTION_FAILED",
+            "AUTHENTICATION_FAILED",
+            "REMOTE_FAILURE",
+            "NOT_UTF8",
+            "CONFIG_INVALID",
+            "INTERNAL"
+          ],
+          "type": "string"
+        },
+        "Evidence": {
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/EvidenceSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "observed_at"
+          ],
+          "type": "object"
+        },
+        "EvidenceSource": {
+          "description": "Who observed a fact. Observer-mode evidence comes from a gateway-issued command over the SSH account, not from a host-side broker.",
+          "enum": [
+            "observer",
+            "broker"
+          ],
+          "type": "string"
+        },
+        "Outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "cancelled",
+            "outcome_unknown"
+          ],
+          "type": "string"
+        },
+        "RetryStrategy": {
+          "oneOf": [
+            {
+              "properties": {
+                "strategy": {
+                  "const": "never",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "reconcile",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "replan",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "strategy": {
+                  "const": "narrow_request",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "strategy": {
+                  "const": "retry_after",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "strategy",
+                "seconds"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SentinelError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "$ref": "#/$defs/RetryStrategy"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retry"
+          ],
+          "type": "object"
+        },
+        "TransferDownloadData": {
+          "properties": {
+            "artifact_id": {
+              "type": "string"
+            },
+            "bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "content_trust": {
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "next_action": {
+              "type": "string"
+            },
+            "sha256": {
+              "description": "Remote and local SHA-256 agree on this value.",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/ArtifactOrigin"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "bytes",
+            "sha256",
+            "source",
+            "expires_at",
+            "next_action",
+            "content_trust"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "artifact_id": {
+          "description": "Holds the complete envelope when truncated; read it with `ssh_artifact_read`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TransferDownloadData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` when the result was truncated to an artefact or the call failed."
+        },
+        "data_preview": {
+          "description": "Start of the pretty-printed data when truncated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SentinelError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the outcome is failed, cancelled or outcome_unknown."
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryStrategy"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation_id",
+        "outcome",
+        "observed_at",
+        "truncated",
+        "evidence",
+        "retry",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  }
+]
