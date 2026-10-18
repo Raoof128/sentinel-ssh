@@ -406,26 +406,32 @@ async fn e2e_nested_unreadable_root_is_invisible_through_its_parent() {
 
 #[tokio::test]
 async fn e2e_process_list_shows_the_host_not_the_gateway() {
-    use sentinel_gateway::tools::processes::{ProcessListParams, ssh_process_list};
+    use sentinel_gateway::tools::processes::{ProcessListParams, ProcessSort, ssh_process_list};
     let fx = fixture_or_skip!();
     let e = ctx(&fx);
+    // A sort no other test uses marks this call's own shell, timeout wrapper and ps: concurrent tests run their own
+    // gateway sessions on other connections, and those are legitimately visible to the same account.
     let p = ssh_process_list(
         &e.ctx,
         ProcessListParams {
             host_id: "fx".into(),
+            user: Some("sentinel".into()),
+            sort: Some(ProcessSort::Mem),
             limit: Some(200),
             ..Default::default()
         },
     )
     .await
     .unwrap();
-    assert!(p.data.processes.iter().any(|x| x.command == "sshd"), "{:?}", p.data.processes);
-    // Other sessions' sshd processes (earlier tests' persistent masters) are legitimately listed; this call's own
-    // shell, its children and its timeout wrapper are not.
+    assert!(
+        p.data.processes.iter().any(|x| x.command.starts_with("sshd")),
+        "{:?}",
+        p.data.processes
+    );
     for x in &p.data.processes {
         assert!(
-            !x.args_redacted.contains("SENTINEL") && !matches!(x.command.as_str(), "ps" | "head" | "timeout"),
-            "the gateway's own process is listed: {x:?}"
+            !(x.args_redacted.contains("-u 'sentinel'") && x.args_redacted.contains("--sort=-pmem")),
+            "this call's own process is listed: {x:?}"
         );
     }
 }
