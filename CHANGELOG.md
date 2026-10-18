@@ -34,6 +34,8 @@ Red-team hardening of observer mode. Everything below is on `main` but is not pa
 - `scripts/check.sh` quality gate: fmt, clippy, `forbid(unsafe_code)`, secret and flag-literal scans, tool-contract freshness, and 100% line coverage of product code.
 - An end-to-end red-team suite against the Docker fixture, including a live swap-race attacker.
 - Full documentation set under `docs/`, plus `SECURITY.md` and `CONTRIBUTING.md`.
+- Operations guide: onboarding a host safely (key pinning, per-host `restrict` keys, the `AllowUsers` drop-in with a held-session reload) and the trade-offs of running as root.
+- Validated against six live hosts (three DigitalOcean droplets in observer then root mode, a fourth droplet, and two hardened `AllowUsers` VPN nodes): `doctor --connect` and live read-only and refusal calls passed on all of them.
 
 ### Changed
 

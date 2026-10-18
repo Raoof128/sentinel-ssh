@@ -7,6 +7,8 @@ How to run SentinelSSH day to day: the commands, logging, local state, host-key 
 - [Local state](#local-state)
 - [Rotating a host key](#rotating-a-host-key)
 - [Adding or removing a host](#adding-or-removing-a-host)
+- [Onboarding a host safely](#onboarding-a-host-safely)
+- [Running as root](#running-as-root)
 - [Troubleshooting](#troubleshooting)
 
 ## Commands
@@ -59,6 +61,28 @@ The `known_hosts` file and the connection socket are named after a digest of the
 ## Adding or removing a host
 
 Edit the configuration and restart the server. The configuration is read once at start-up. Run `sentinel-ssh doctor --connect` after any change.
+
+## Onboarding a host safely
+
+The pattern used to bring real hosts under SentinelSSH, each step reversible:
+
+1. **Pin the host key from a trusted source.** Compare the key the network presents with your existing `known_hosts` entry, or with what the host reports from its console (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`). Never pin a key you have only seen over the network you are about to trust.
+2. **Use a key per host,** generated for SentinelSSH and stored outside `~/.ssh` (for example `~/.config/sentinel-ssh/keys/<host>`, mode `0600`). Mark it `restrict` in `authorized_keys`.
+3. **Prefer an unprivileged account:** `useradd -m -s /bin/sh sentinel-observer`, add it to `adm` to read logs, no sudo.
+4. **Check sshd's access rules first.** If `sshd -T` shows `AllowUsers` or `AllowGroups`, the new account cannot log in. Add it with a drop-in (`/etc/ssh/sshd_config.d/60-sentinel-observer.conf` containing `AllowUsers sentinel-observer`; OpenSSH appends to the list), keep an existing session open, run `sshd -t`, reload, and confirm a **fresh** login for your existing admin user before closing the old session.
+5. **Register narrowly.** Logs and services are usually enough. Leave out directories that hold credentials: application folders with `.env` files, WordPress `wp-config.php`, Moodle `config.php`, VPN configs with private keys.
+6. **Verify:** `sentinel-ssh doctor --connect`, then a few read-only calls and a few that must be refused.
+
+To undo: delete the key's line from `authorized_keys`, `userdel -r sentinel-observer`, and remove any drop-in, then `sshd -t && systemctl reload ssh`.
+
+## Running as root
+
+`user = "root"` with a root key is accepted. The tools stay exactly as read-only and as scoped to registered roots; what changes is reach and risk:
+
+- **Reach:** root-only files inside registered roots become readable (for example a database slow log or `btmp`), and disk usage no longer skips unreadable subtrees.
+- **Risk:** the key file is a full root credential. Anyone who copies it owns the host, outside SentinelSSH entirely. Containment then rests only on the gateway, because the account blocks nothing.
+
+If you choose it, use a dedicated root key per host marked `restrict`, keep registered roots as narrow as before, and prefer it only for hosts you could rebuild. A targeted alternative is to grant the unprivileged observer read access to the specific root-only files you need (for example group membership or an ACL).
 
 ## Troubleshooting
 
