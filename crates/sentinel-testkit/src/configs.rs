@@ -100,6 +100,12 @@ timeout_secs = 5
 [hosts.health_checks.api_active]
 kind = "service_active"
 service = "api"
+
+[hosts.health_checks.api_query]
+kind = "http"
+url = "http://127.0.0.1:8080/health?sig=synthetic-query-value#frag"
+expect_status = 200
+timeout_secs = 5
 "#,
         identity = identity.display(),
     )

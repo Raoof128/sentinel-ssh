@@ -533,3 +533,24 @@ async fn ssh_client_failures_do_not_leak_inventory() {
     let s = serde_json::to_string(&ssh_host_inspect(&ctx_with(fake), inspect("h1")).await.unwrap_err()).unwrap();
     assert!(!s.contains("203.0.113.10") && !s.contains("sentinel-observer"), "{s}");
 }
+
+#[tokio::test]
+async fn health_check_result_never_echoes_the_url_query() {
+    let fake = FakeBackend::new().on("curl", b"200".to_vec());
+    let ctx = ctx_with(fake.clone());
+    let e = ssh_health_check(
+        &ctx,
+        HealthCheckParams {
+            host_id: "h1".into(),
+            check_id: "api_query".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    // The host still gets the full URL; the agent sees it with the query and fragment withheld.
+    assert!(fake.calls()[0].contains("sig=synthetic-query-value"));
+    let json = serde_json::to_string(&e).unwrap();
+    assert!(!json.contains("synthetic-query-value") && !json.contains("frag"), "{json}");
+    assert!(json.contains("http://127.0.0.1:8080/health?<redacted>"), "{json}");
+}

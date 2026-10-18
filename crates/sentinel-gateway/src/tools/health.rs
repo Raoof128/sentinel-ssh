@@ -34,6 +34,28 @@ pub struct HealthResult {
     pub definition: HealthCheckConfig,
 }
 
+/// The query and fragment of a registered URL often carry tokens: the host gets the full URL, the result does not.
+fn redacted(def: HealthCheckConfig) -> HealthCheckConfig {
+    match def {
+        HealthCheckConfig::Http {
+            url,
+            expect_status,
+            timeout_secs,
+        } => {
+            let url = match url.find(['?', '#']) {
+                Some(i) => format!("{}?<redacted>", &url[..i]),
+                None => url,
+            };
+            HealthCheckConfig::Http {
+                url,
+                expect_status,
+                timeout_secs,
+            }
+        }
+        other => other,
+    }
+}
+
 pub async fn ssh_health_check(ctx: &AppContext, p: HealthCheckParams) -> Result<ResultEnvelope<HealthResult>> {
     let check_id = p.check_id.clone();
     read_tool(
@@ -94,7 +116,7 @@ pub async fn ssh_health_check(ctx: &AppContext, p: HealthCheckParams) -> Result<
                 kind: kind.into(),
                 passing,
                 observation,
-                definition: def,
+                definition: redacted(def),
             })
         },
     )

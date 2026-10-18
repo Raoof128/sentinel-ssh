@@ -380,3 +380,79 @@ fn a_symlink_held_in_an_open_directory_is_refused() {
     let e = ensure_private_dir(&open.join("link").join("run")).unwrap_err();
     assert!(e.message.contains("writable by other users"), "{}", e.message);
 }
+
+#[test]
+fn health_urls_with_credentials_are_rejected() {
+    let f = fx();
+    let m = f.minimal();
+    for url in [
+        "http://user:pw@127.0.0.1:8080/health",
+        "http://:pw@127.0.0.1/",
+        "https://u@example.test/",
+    ] {
+        rejects(
+            &f,
+            &m.replace("http://127.0.0.1:8080/health\"", &format!("{url}\"")),
+            "must not embed credentials",
+        );
+    }
+    // An '@' after the authority (path, query) is not userinfo.
+    f.load(&m.replace("http://127.0.0.1:8080/health\"", "http://127.0.0.1:8080/a@b?c=@\""))
+        .unwrap();
+}
+
+#[test]
+fn budgets_outside_their_ranges_are_rejected() {
+    let f = fx();
+    let m = f.minimal();
+    let with = |b: &str| m.replace("\n[principal]", &format!("\n[gateway.budgets]\n{b}\n\n[principal]"));
+    for b in [
+        "read_timeout_secs = 0",
+        "connect_timeout_secs = 0",
+        "per_host_reads = 0",
+        "max_batch_items = 0",
+        "max_active_operations = 0",
+        "max_result_bytes = 0",
+        "default_result_bytes = 70000",
+        "max_result_bytes = 4194304",
+        "transfer_chunk_bytes = 0",
+        "max_transfer_bytes = 0",
+        "read_timeout_secs = 100000",
+        "max_artifact_bytes = 0",
+    ] {
+        rejects(&f, &with(b), "budget");
+    }
+    let ok = f.load(&with("read_timeout_secs = 2\nper_host_reads = 1")).unwrap();
+    assert_eq!(ok.gateway.budgets.read_timeout_secs, 2);
+}
+
+#[test]
+fn trust_decision_covers_symlinks_by_owner_only() {
+    use sentinel_gateway::config::is_untrusted;
+    let me = 501;
+    // A symlink's own mode bits are meaningless; its owner is what can re-point it.
+    assert!(!is_untrusted(me, 0o120777, true, me));
+    assert!(!is_untrusted(0, 0o120777, true, me));
+    assert!(is_untrusted(777, 0o120755, true, me));
+    // Directories and files: owner, then group/other write unless sticky.
+    assert!(!is_untrusted(0, 0o040755, false, me));
+    assert!(!is_untrusted(0, 0o041777, false, me));
+    assert!(is_untrusted(0, 0o040775, false, me));
+    assert!(is_untrusted(777, 0o040755, false, me));
+}
+
+#[test]
+fn ssh_binary_reached_through_a_symlink_is_resolved() {
+    let f = fx();
+    let link = f.dirs.state.path().join("ssh-link");
+    std::os::unix::fs::symlink("/usr/bin/ssh", &link).unwrap();
+    let real = sentinel_gateway::config::check_trusted_executable(&link).unwrap();
+    assert_eq!(real, std::fs::canonicalize("/usr/bin/ssh").unwrap());
+}
+
+#[test]
+fn the_filesystem_root_cannot_be_a_registered_root() {
+    let f = fx();
+    let m = f.minimal();
+    rejects(&f, &m.replace("path = \"/srv/app\"", "path = \"/\""), "must not be /");
+}

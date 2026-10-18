@@ -24,6 +24,13 @@ pub fn resolve_scoped(root: &RootPolicy, relative: &str) -> Result<ScopedPath> {
     if relative.chars().any(|c| (c as u32) < 0x20 || c == '\u{7f}') {
         return Err(invalid("path contains control characters"));
     }
+    // Linux PATH_MAX and NAME_MAX: anything longer fails remotely anyway, after costing a round trip.
+    if relative.len() > 4096 {
+        return Err(invalid("path exceeds 4096 bytes"));
+    }
+    if relative.split('/').any(|c| c.len() > 255) {
+        return Err(invalid("a path component exceeds 255 bytes"));
+    }
     if relative.starts_with('/') {
         return Err(invalid("path must be relative to the root alias"));
     }

@@ -100,3 +100,15 @@ fn display_escape_is_unambiguous() {
     assert_eq!(display_escape("a\\b"), "a\\\\b");
     assert_ne!(display_escape("a\\u{202E}b"), display_escape("a\u{202e}b"));
 }
+
+#[test]
+fn overlong_paths_and_components_are_rejected() {
+    let long_component = "a".repeat(256);
+    let e = resolve_scoped(&app(), &long_component).unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidInput);
+    assert!(e.message.contains("255"), "{}", e.message);
+    let deep = vec!["d"; 2100].join("/");
+    let e = resolve_scoped(&app(), &deep).unwrap_err();
+    assert!(e.message.contains("4096"), "{}", e.message);
+    resolve_scoped(&app(), &"a".repeat(255)).unwrap();
+}

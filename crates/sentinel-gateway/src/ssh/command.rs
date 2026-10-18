@@ -200,7 +200,7 @@ const PRELUDE: &str = "NL='\n'; \
 rp() { o=$(realpath -e -- \"$1\" && echo x) || return 1; o=${o%x}; o=${o%\"$NL\"}; \
 case $o in *\"$NL\"*) return 1;; esac; printf '%s' \"$o\"; }; \
 deny() { echo \"$1\" >&2; exit \"$2\"; }; \
-inside() { case \"$1/\" in \"$2\"/*) return 0;; esac; return 1; }; \
+inside() { [ \"$2\" = / ] && return 0; case \"$1/\" in \"$2\"/*) return 0;; esac; return 1; }; \
 enter() { cd -P -- \"$1\" 2>/dev/null && return 0; [ -e \"$1\" ] || deny SENTINEL_MISSING 91; \
 [ -d \"$1\" ] && deny SENTINEL_NO_ACCESS 92; deny SENTINEL_KIND_MISMATCH 97; }; ";
 
@@ -279,9 +279,10 @@ pub fn contained(root: &str, target: &str, pin: Pin, excluded: &[String], main: 
     match pin {
         Pin::Dir => {
             p.push_str("set --; ");
+            // Every excluded root, nested or not: `-samefile` only ever matches that root's own inode.
             for x in excluded {
                 p.push_str(&format!(
-                    "if x=$(rp {}); then case \"$x\" in \"$w\"/*) set -- \"$@\" ! -samefile \"$x\";; esac; fi; ",
+                    "if x=$(rp {}); then set -- \"$@\" ! -samefile \"$x\"; fi; ",
                     shell_quote(x)
                 ));
             }
@@ -289,7 +290,7 @@ pub fn contained(root: &str, target: &str, pin: Pin, excluded: &[String], main: 
         Pin::Tree => {
             for x in excluded {
                 p.push_str(&format!(
-                    "if x=$(rp {}); then case \"$x\" in \"$w\"/*) {};; esac; fi; ",
+                    "if x=$(rp {}); then if inside \"$x\" \"$w\"; then {}; fi; fi; ",
                     shell_quote(x),
                     deny(NESTED_EXCLUDED, NESTED_EXCLUDED_EXIT)
                 ));
@@ -362,6 +363,47 @@ pub fn fd3_size_limit(max_bytes: u64, main: RemoteCommand) -> RemoteCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `inside` is plain POSIX sh, so its semantics are checked against the local /bin/sh.
+    fn inside_sh(a: &str, b: &str) -> bool {
+        let script = format!("{PRELUDE}inside {} {}", shell_quote(a), shell_quote(b));
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .status()
+            .unwrap()
+            .success()
+    }
+
+    #[test]
+    fn inside_treats_the_filesystem_root_as_containing_everything() {
+        assert!(inside_sh("/srv/app", "/srv/app"));
+        assert!(inside_sh("/srv/app/x", "/srv/app"));
+        assert!(!inside_sh("/srv/apple", "/srv/app"));
+        assert!(!inside_sh("/srv", "/srv/app"));
+        assert!(inside_sh("/srv/app", "/"));
+        assert!(inside_sh("/", "/"));
+        assert!(!inside_sh("/", "/srv"));
+    }
+
+    #[test]
+    fn nested_exclusion_checks_use_inside() {
+        let ex = vec!["/srv/app/vault".to_owned()];
+        let dir = contained("/srv/app", "/srv/app", Pin::Dir, &ex, RemoteCommand::new("find").skip_excluded()).render();
+        assert!(
+            dir.contains("if x=$(rp '/srv/app/vault'); then set -- \"$@\" ! -samefile \"$x\"; fi;"),
+            "{dir}"
+        );
+        let tree = contained("/srv/app", "/srv/app", Pin::Tree, &ex, RemoteCommand::new("du")).render();
+        assert!(
+            tree.contains("if inside \"$x\" \"$w\"; then deny SENTINEL_NESTED_EXCLUDED 90; fi;"),
+            "{tree}"
+        );
+        assert!(
+            !dir.contains("\"$w\"/*") && !tree.contains("\"$w\"/*"),
+            "raw prefix patterns remain"
+        );
+    }
 
     #[test]
     fn renders_quoted() {

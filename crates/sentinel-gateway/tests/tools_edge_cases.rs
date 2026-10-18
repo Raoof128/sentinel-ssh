@@ -379,7 +379,7 @@ async fn excluded_roots_are_skipped_refused_or_checked_by_pin() {
     let calls = fake.calls();
     let [list, stat, du] = &calls[..] else { panic!("{calls:?}") };
     assert!(
-        list.contains("set --; if x=$(rp '/srv/secrets'); then case \"$x\" in \"$w\"/*) set -- \"$@\" ! -samefile \"$x\";;"),
+        list.contains("set --; if x=$(rp '/srv/secrets'); then set -- \"$@\" ! -samefile \"$x\"; fi;"),
         "{list}"
     );
     assert!(list.contains("-maxdepth 1 \"$@\" -printf"), "{list}");
@@ -387,7 +387,10 @@ async fn excluded_roots_are_skipped_refused_or_checked_by_pin() {
         stat.contains("e=\"$w\"/'data'; if x=$(rp '/srv/secrets'); then if inside \"$e\" \"$x\"; then deny SENTINEL_EXCLUDED 93"),
         "{stat}"
     );
-    assert!(du.contains("case \"$x\" in \"$w\"/*) deny SENTINEL_NESTED_EXCLUDED 90;;"), "{du}");
+    assert!(
+        du.contains("if inside \"$x\" \"$w\"; then deny SENTINEL_NESTED_EXCLUDED 90; fi;"),
+        "{du}"
+    );
     assert!(!du.contains("\"$@\""), "{du}");
 
     let refused = ctx_with(FakeBackend::new().on_script(script("du", b"", b"SENTINEL_NESTED_EXCLUDED\n", 90)));

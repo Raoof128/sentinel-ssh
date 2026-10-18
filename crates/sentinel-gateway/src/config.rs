@@ -285,6 +285,13 @@ pub fn check_private_file(path: &Path, what: &str) -> Result<()> {
 /// Every existing ancestor of `path` must be owned by root or the current user and must not be writable by group or
 /// others unless it is sticky (like /tmp, where others cannot rename or replace entries they do not own). Otherwise
 /// another account could swap a component out from under the gateway (red team M1).
+/// Whether an inode with this owner and mode lets another account change what a path resolves to. A symlink's own mode
+/// bits are meaningless (only its owner can re-point it); anything else must not be group/other writable unless sticky.
+pub fn is_untrusted(uid: u32, mode: u32, symlink: bool, me: u32) -> bool {
+    let foreign = uid != 0 && uid != me;
+    foreign || (!symlink && mode & 0o022 != 0 && mode & 0o1000 == 0)
+}
+
 pub fn check_trusted_ancestors(path: &Path, what: &str) -> Result<()> {
     let me = rustix::process::getuid().as_raw();
     // Resolve the longest existing prefix: the chain that must be trusted is the real one, not the lexical one
@@ -308,11 +315,12 @@ pub fn check_trusted_ancestors(path: &Path, what: &str) -> Result<()> {
         .filter(|a| !a.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .collect();
+    // lstat, not stat: a symlink component is judged by its own owner, and the directory it points to is judged in
+    // the resolved chain.
     for anc in lexical.iter().map(PathBuf::as_path).chain(real.ancestors()) {
-        let meta =
-            std::fs::metadata(anc).map_err(|e| invalid(format!("{what} {}: cannot inspect {}: {e}", path.display(), anc.display())))?;
-        let sticky = meta.mode() & 0o1000 != 0;
-        if (meta.uid() != 0 && meta.uid() != me) || (meta.mode() & 0o022 != 0 && !sticky) {
+        let meta = std::fs::symlink_metadata(anc)
+            .map_err(|e| invalid(format!("{what} {}: cannot inspect {}: {e}", path.display(), anc.display())))?;
+        if is_untrusted(meta.uid(), meta.mode(), meta.file_type().is_symlink(), me) {
             return Err(invalid(format!(
                 "{what} {}: ancestor {} is owned or writable by other users",
                 path.display(),
@@ -330,6 +338,19 @@ pub fn check_trusted_executable(path: &Path) -> Result<PathBuf> {
         return Err(invalid(format!("ssh_binary {} must be an absolute path", path.display())));
     }
     let real = std::fs::canonicalize(path).map_err(|e| invalid(format!("cannot resolve ssh_binary {}: {e}", path.display())))?;
+    // The configured leaf itself may be a symlink (e.g. a package manager's bin link): whoever owns it can re-point it.
+    let leaf = std::fs::symlink_metadata(path).map_err(|e| invalid(format!("cannot inspect ssh_binary {}: {e}", path.display())))?;
+    if is_untrusted(
+        leaf.uid(),
+        leaf.mode(),
+        leaf.file_type().is_symlink(),
+        rustix::process::getuid().as_raw(),
+    ) {
+        return Err(invalid(format!(
+            "ssh_binary {} is owned or writable by other users",
+            path.display()
+        )));
+    }
     let meta = std::fs::metadata(&real).map_err(|e| invalid(format!("cannot inspect ssh_binary {}: {e}", real.display())))?;
     let me = rustix::process::getuid().as_raw();
     if (meta.uid() != 0 && meta.uid() != me) || meta.mode() & 0o022 != 0 {
@@ -417,6 +438,48 @@ fn valid_url(u: &str) -> bool {
     (u.starts_with("http://") || u.starts_with("https://")) && !u.chars().any(|c| c.is_whitespace() || (c as u32) < 0x20)
 }
 
+/// Userinfo (`user:password@`) in the authority: it would travel in a remote argv and in results (red team M6).
+fn url_has_userinfo(u: &str) -> bool {
+    let rest = u.split_once("://").map_or(u, |(_, r)| r);
+    rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())].contains('@')
+}
+
+impl Budgets {
+    /// Every budget is a bound somewhere: zero would wedge the gateway, and the upper ends keep a typo from
+    /// disabling a limit (spec §11.3).
+    fn validate(&self) -> Result<()> {
+        let b = self;
+        let checks: [(&str, u64, u64, u64); 15] = [
+            ("max_active_operations", b.max_active_operations as u64, 1, 4096),
+            ("max_pending_operations", b.max_pending_operations as u64, 1, 65536),
+            ("per_host_reads", b.per_host_reads as u64, 1, 64),
+            ("max_batch_items", b.max_batch_items as u64, 1, 64),
+            ("queue_wait_secs", b.queue_wait_secs, 1, 300),
+            ("connect_timeout_secs", b.connect_timeout_secs, 1, 300),
+            ("read_timeout_secs", b.read_timeout_secs, 1, 3600),
+            (
+                "default_result_bytes",
+                b.default_result_bytes as u64,
+                1024,
+                b.max_result_bytes as u64,
+            ),
+            ("max_result_bytes", b.max_result_bytes as u64, 1024, 1_048_576),
+            ("transfer_chunk_bytes", b.transfer_chunk_bytes as u64, 4096, 16_777_216),
+            ("max_transfer_bytes", b.max_transfer_bytes, 1, 1 << 40),
+            ("transfer_idle_timeout_secs", b.transfer_idle_timeout_secs, 1, 3600),
+            ("transfer_total_timeout_secs", b.transfer_total_timeout_secs, 1, 86_400),
+            ("artifact_retention_hours", b.artifact_retention_hours, 1, 8760),
+            ("max_artifact_bytes", b.max_artifact_bytes, 1, 1 << 42),
+        ];
+        for (name, v, lo, hi) in checks {
+            if v < lo || v > hi {
+                return Err(invalid(format!("budget {name} = {v} is outside {lo}..={hi}")));
+            }
+        }
+        Ok(())
+    }
+}
+
 pub fn load_config(path: &Path) -> Result<Config> {
     check_private_file(path, "config file")?;
     let text = std::fs::read_to_string(path).map_err(|e| invalid(format!("cannot read config {}: {e}", path.display())))?;
@@ -440,6 +503,7 @@ pub fn load_config(path: &Path) -> Result<Config> {
     ] {
         plain_absolute(p, what)?;
     }
+    cfg.gateway.budgets.validate()?;
     let cp_len = cfg.gateway.runtime_dir.as_os_str().len() + CONTROL_PATH_SUFFIX;
     if cp_len > MAX_CONTROL_PATH {
         return Err(invalid(format!(
@@ -470,6 +534,12 @@ pub fn load_config(path: &Path) -> Result<Config> {
                 return Err(invalid(format!("host '{}': invalid root alias '{alias}'", h.id)));
             }
             validate_abs_path(&r.path, &format!("host '{}' root '{alias}' path", h.id))?;
+            if r.path == "/" {
+                return Err(invalid(format!(
+                    "host '{}' root '{alias}': path must not be / (register the directories you mean)",
+                    h.id
+                )));
+            }
             if r.export && !r.read {
                 return Err(invalid(format!("host '{}' root '{alias}': export requires read = true", h.id)));
             }
@@ -494,6 +564,12 @@ pub fn load_config(path: &Path) -> Result<Config> {
             }
             match hc {
                 HealthCheckConfig::Http { url, timeout_secs, .. } => {
+                    if url_has_userinfo(url) {
+                        return Err(invalid(format!(
+                            "host '{}' health check '{id}': url must not embed credentials (user:password@)",
+                            h.id
+                        )));
+                    }
                     if !valid_url(url) || *timeout_secs == 0 || *timeout_secs > 60 {
                         return Err(invalid(format!(
                             "host '{}' health check '{id}': url must be http(s) without spaces; timeout 1-60 s",
