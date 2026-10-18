@@ -330,3 +330,23 @@ async fn stale_partial_files_are_swept() {
     keep.sweep_expired().unwrap();
     assert!(keep.dir().join("art_y.part").exists(), "a write in progress is not touched");
 }
+
+/// Security review: check-then-write let two concurrent downloads both pass the quota. Reservations are atomic and
+/// shared by every clone of the store; they are released when dropped.
+#[tokio::test]
+async fn quota_reservations_are_atomic_across_clones() {
+    let d = tempfile::tempdir().unwrap();
+    let store = ArtifactStore::open(&d.path().join("art"), Duration::from_secs(3600))
+        .unwrap()
+        .with_quota(10);
+    let clone = store.clone();
+    let first = store.reserve(&me().id, 6).unwrap();
+    assert_eq!(
+        clone.reserve(&me().id, 6).unwrap_err().code,
+        ErrorCode::BudgetExceeded,
+        "the second reservation sees the first"
+    );
+    assert!(clone.reserve(&other().id, 6).is_ok(), "quotas are per principal");
+    drop(first);
+    assert!(clone.reserve(&me().id, 6).is_ok(), "dropping a reservation releases it");
+}

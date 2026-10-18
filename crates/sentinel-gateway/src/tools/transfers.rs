@@ -85,7 +85,8 @@ pub async fn ssh_transfer_download(ctx: &AppContext, p: TransferDownloadParams) 
             if size > b.max_transfer_bytes {
                 return Err(SentinelError::new(ErrorCode::BudgetExceeded, "file exceeds the configured transfer size limit"));
             }
-            run.ctx.artifacts.ensure_quota(&run.ctx.principal.id, size)?;
+            // Held until the artefact is published or the transfer fails, so concurrent downloads cannot oversubscribe.
+            let _quota = run.ctx.artifacts.reserve(&run.ctx.principal.id, size)?;
             if let Some(exp) = &p.expected_sha256
                 && !exp.eq_ignore_ascii_case(&remote_digest)
             {

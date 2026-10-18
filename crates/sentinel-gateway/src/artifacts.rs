@@ -1,10 +1,12 @@
 //! Principal-scoped local artefact store (spec §6.4, §7.3, §10.7). File bytes and oversized results live here, never in
 //! model context. Each artefact is `<id>.bin` plus `<id>.json` metadata, both mode 0600, in a 0700 directory.
 
+use std::collections::HashMap;
 use std::io::{SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -54,6 +56,25 @@ pub struct ArtifactStore {
     retention: Duration,
     /// Per-principal byte quota over live artefacts (spec §9.3).
     quota: u64,
+    /// Bytes promised to writes in progress, per principal. Shared by every clone so concurrent writers see each other.
+    reserved: Arc<Mutex<HashMap<PrincipalId, u64>>>,
+}
+
+/// Holds part of a principal's quota for a write in progress; released on drop.
+#[derive(Debug)]
+pub struct QuotaReservation {
+    reserved: Arc<Mutex<HashMap<PrincipalId, u64>>>,
+    owner: PrincipalId,
+    bytes: u64,
+}
+
+impl Drop for QuotaReservation {
+    fn drop(&mut self) {
+        let mut m = self.reserved.lock().expect("quota reservations");
+        if let Some(v) = m.get_mut(&self.owner) {
+            *v = v.saturating_sub(self.bytes);
+        }
+    }
 }
 
 fn io_err(what: &str, e: std::io::Error) -> SentinelError {
@@ -167,6 +188,7 @@ impl ArtifactStore {
             dir: dir.to_path_buf(),
             retention,
             quota: u64::MAX,
+            reserved: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -175,10 +197,9 @@ impl ArtifactStore {
         self
     }
 
-    /// Refuses unless `owner` can store `additional` more bytes within the quota. Expired artefacts do not count.
-    pub fn ensure_quota(&self, owner: &PrincipalId, additional: u64) -> Result<()> {
+    fn used_bytes(&self, owner: &PrincipalId) -> Result<u64> {
         let now = Utc::now();
-        let used: u64 = std::fs::read_dir(&self.dir)
+        Ok(std::fs::read_dir(&self.dir)
             .map_err(|e| io_err("list", e))?
             .flatten()
             .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
@@ -186,17 +207,35 @@ impl ArtifactStore {
             .filter_map(|b| serde_json::from_slice::<ArtifactRecord>(&b).ok())
             .filter(|r| &r.owner == owner && r.expires_at > now)
             .map(|r| r.bytes)
-            .sum();
+            .sum())
+    }
+
+    /// Atomically reserves `additional` bytes of `owner`'s quota, counting live artefacts and other reservations.
+    /// Check and reservation happen under one lock, so concurrent writers cannot both pass.
+    pub fn reserve(&self, owner: &PrincipalId, additional: u64) -> Result<QuotaReservation> {
+        let mut m = self.reserved.lock().expect("quota reservations");
+        let pending = m.get(owner).copied().unwrap_or(0);
+        let used = self.used_bytes(owner)?.saturating_add(pending);
         if used.saturating_add(additional) > self.quota {
             return Err(SentinelError::new(
                 ErrorCode::BudgetExceeded,
                 format!(
-                    "artefact quota exceeded: {used} of {} bytes in use, {additional} more requested",
+                    "artefact quota exceeded: {used} of {} bytes in use or reserved, {additional} more requested",
                     self.quota
                 ),
             ));
         }
-        Ok(())
+        *m.entry(owner.clone()).or_insert(0) += additional;
+        Ok(QuotaReservation {
+            reserved: self.reserved.clone(),
+            owner: owner.clone(),
+            bytes: additional,
+        })
+    }
+
+    /// Refuses unless `owner` could store `additional` more bytes right now (a reservation taken and released).
+    pub fn ensure_quota(&self, owner: &PrincipalId, additional: u64) -> Result<()> {
+        self.reserve(owner, additional).map(|_| ())
     }
 
     pub fn dir(&self) -> &Path {
@@ -249,7 +288,7 @@ impl ArtifactStore {
     }
 
     pub async fn put_bytes(&self, owner: &PrincipalId, origin: ArtifactOrigin, kind: ContentKind, bytes: &[u8]) -> Result<ArtifactRecord> {
-        self.ensure_quota(owner, bytes.len() as u64)?;
+        let _quota = self.reserve(owner, bytes.len() as u64)?;
         Self::fill(self.begin_write(owner, origin, kind)?, bytes).await
     }
 
