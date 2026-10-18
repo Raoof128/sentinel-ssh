@@ -118,13 +118,19 @@ impl RemoteCommand {
     }
 }
 
-/// Runs `main` only if `stat -c %F` (which does not follow a final symlink) reports `expected` for `absolute_path`.
-/// Otherwise prints [`KIND_MISMATCH`] to stderr and exits [`KIND_MISMATCH_EXIT`].
+/// Runs `main` only if `stat -c %F` (which does not follow a final symlink) reports `expected` for `absolute_path`
+/// ("regular file" also accepts GNU's "regular empty file"). Otherwise prints [`KIND_MISMATCH`] to stderr and exits
+/// [`KIND_MISMATCH_EXIT`].
 pub fn kind_guard(expected: &'static str, absolute_path: &str, main: RemoteCommand) -> RemoteCommand {
+    let pattern = if expected == "regular file" {
+        "\"regular file\"|\"regular empty file\")".to_owned()
+    } else {
+        format!("\"{expected}\")")
+    };
     RemoteCommand::wrap(
-        format!("if [ \"$(stat -c %F -- {})\" = \"{expected}\" ]; then ", shell_quote(absolute_path)),
+        format!("case \"$(stat -c %F -- {})\" in {pattern} ", shell_quote(absolute_path)),
         main,
-        &format!("; else echo {KIND_MISMATCH} >&2; exit {KIND_MISMATCH_EXIT}; fi"),
+        &format!(";; *) echo {KIND_MISMATCH} >&2; exit {KIND_MISMATCH_EXIT};; esac"),
     )
 }
 
@@ -154,14 +160,23 @@ mod tests {
         );
     }
 
+    /// GNU stat reports a zero-byte file as "regular empty file"; a guard on "regular file" must accept it.
+    #[test]
+    fn regular_file_guard_accepts_empty_files() {
+        let r = kind_guard("regular file", "/srv/app/e", RemoteCommand::new("true")).render();
+        assert!(r.contains("\"regular file\"|\"regular empty file\")"), "{r}");
+        let d = kind_guard("directory", "/srv/app", RemoteCommand::new("true")).render();
+        assert!(!d.contains("empty"), "{d}");
+    }
+
     #[test]
     fn kind_guard_shape() {
         let r = kind_guard("regular file", "/srv/app/a", RemoteCommand::new("cat").flag("--").arg("/srv/app/a")).render();
         assert!(
-            r.starts_with("if [ \"$(stat -c %F -- '/srv/app/a')\" = \"regular file\" ]; then cat -- '/srv/app/a'; else"),
+            r.starts_with("case \"$(stat -c %F -- '/srv/app/a')\" in \"regular file\"|\"regular empty file\") cat -- '/srv/app/a';; *)"),
             "{r}"
         );
-        assert!(r.ends_with("exit 97; fi"), "{r}");
+        assert!(r.ends_with("exit 97;; esac"), "{r}");
     }
 
     #[test]

@@ -2,8 +2,10 @@
 
 pub mod capabilities;
 pub mod disk;
+pub mod files;
 pub mod health;
 pub mod hosts;
+pub mod logs;
 pub mod pipeline;
 pub mod processes;
 pub mod services;

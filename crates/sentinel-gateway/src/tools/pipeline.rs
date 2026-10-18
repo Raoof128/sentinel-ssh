@@ -70,6 +70,9 @@ pub fn classify_remote(cmd: &RemoteCommand, out: &RunOutcome) -> Result<()> {
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
     if out.exit == ExitKind::Code(KIND_MISMATCH_EXIT) && stderr.contains(KIND_MISMATCH) {
+        if stderr.contains("No such file or directory") {
+            return Err(SentinelError::new(ErrorCode::NotFound, "path not found"));
+        }
         return Err(SentinelError::new(
             ErrorCode::PolicyDenied,
             "target has an unexpected file type (symlinks and special files are refused)",
