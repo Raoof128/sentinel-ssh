@@ -314,21 +314,46 @@ pub fn contained(root: &str, target: &str, pin: Pin, excluded: &[String], main: 
     if pin == Pin::File {
         let e = shell_quote(entry.as_deref().unwrap_or("."));
         p.push_str(&format!(
-            "case \"$(stat -c %F -- {e})\" in \"regular file\"|\"regular empty file\") ;; *) {};; esac; \
-             exec 3< {e}; f=$(rp /dev/fd/3) || {}; inside \"$f\" \"$r\" || {}; ",
+            "case \"$(stat -c %F -- {e})\" in \"regular file\"|\"regular empty file\") ;; *) {};; esac; exec 3< {e}; ",
             deny(KIND_MISMATCH, KIND_MISMATCH_EXIT),
+        ));
+        let fd_inside = format!(
+            "{}inside \"$f\" \"$r\" || {}; {}",
+            fd_path(),
             deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT),
-            deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT)
-        ));
-        p.push_str(&exclusions("f", excluded));
-        p.push_str(&format!(
-            "case \"$(stat -L -c '%F|%h' /dev/fd/3)\" in \"regular file|1\"|\"regular empty file|1\") ;; \
-             \"regular file|\"*|\"regular empty file|\"*) {};; *) {};; esac; ",
-            deny(HARDLINK, HARDLINK_EXIT),
-            deny(KIND_MISMATCH, KIND_MISMATCH_EXIT)
-        ));
+            exclusions("f", excluded)
+        );
+        p.push_str(&fd_inside);
+        p.push_str(&link_count_is_one());
+        // Again after the link count: see `fd_path`.
+        p.push_str(&fd_inside);
     }
     RemoteCommand::prefixed(p, &["realpath", "stat"], main)
+}
+
+/// Sets `$f` to the real path of the file open on descriptor 3, refusing a name the kernel reports as deleted.
+///
+/// Run both before and after [`link_count_is_one`]. A hard link to a secret, opened while the attacker's in-root name
+/// existed, passes the first path check; the attacker then unlinks that name, the link count drops to 1, and the
+/// count check passes too. An unlinked name never comes back, so a second check that still finds a live path inside
+/// the root proves that name existed, and was the only one, when the count was taken. Linux shows an unlinked
+/// descriptor's path with a " (deleted)" suffix; a real file named that way is refused as well, so a decoy cannot pose
+/// as the live name (red team: swap race).
+fn fd_path() -> String {
+    format!(
+        "f=$(rp /dev/fd/3) || {s}; case \"$f\" in *\" (deleted)\") {s};; esac; ",
+        s = deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT)
+    )
+}
+
+/// The file on descriptor 3 is a regular file with exactly one name.
+fn link_count_is_one() -> String {
+    format!(
+        "case \"$(stat -L -c '%F|%h' /dev/fd/3)\" in \"regular file|1\"|\"regular empty file|1\") ;; \
+         \"regular file|\"*|\"regular empty file|\"*) {};; *) {};; esac; ",
+        deny(HARDLINK, HARDLINK_EXIT),
+        deny(KIND_MISMATCH, KIND_MISMATCH_EXIT)
+    )
 }
 
 /// A registered file outside any root (a log source): it must resolve to exactly the configured path, be a regular
@@ -342,15 +367,14 @@ pub fn exact_file(path: &str, main: RemoteCommand) -> RemoteCommand {
     p.push_str(&format!(
         "enter {d}; w=$(rp .) || {s}; [ \"$w\" = {d} ] || {s}; \
          case \"$(stat -c %F -- {n})\" in \"regular file\"|\"regular empty file\") ;; *) {k};; esac; \
-         exec 3< {n}; f=$(rp /dev/fd/3) || {s}; [ \"$f\" = {full} ] || {s}; \
-         case \"$(stat -L -c '%F|%h' /dev/fd/3)\" in \"regular file|1\"|\"regular empty file|1\") ;; \
-         \"regular file|\"*|\"regular empty file|\"*) {h};; *) {k};; esac; ",
+         exec 3< {n}; {fd}[ \"$f\" = {full} ] || {s}; {one}{fd}[ \"$f\" = {full} ] || {s}; ",
         d = shell_quote(dir),
         n = shell_quote(name),
         full = shell_quote(path),
         k = deny(KIND_MISMATCH, KIND_MISMATCH_EXIT),
         s = deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT),
-        h = deny(HARDLINK, HARDLINK_EXIT),
+        fd = fd_path(),
+        one = link_count_is_one(),
     ));
     RemoteCommand::prefixed(p, &["realpath", "stat"], main)
 }
@@ -380,6 +404,23 @@ mod tests {
             .status()
             .unwrap()
             .success()
+    }
+
+    /// Red team (swap race, found by e2e): a hard link opened while the attacker's in-root name existed passes the path
+    /// check; unlinking that name then drops the link count to 1 before it is checked. The descriptor's path must be
+    /// re-resolved after the link-count check, and a name the kernel reports as " (deleted)" refused.
+    #[test]
+    fn descriptor_path_is_rechecked_after_the_link_count() {
+        let main = || RemoteCommand::new("cat").stdin_fd3();
+        for c in [
+            contained("/srv/app", "/srv/app/data/race", Pin::File, &["/srv/secrets".to_owned()], main()).render(),
+            exact_file("/var/log/app/api.log", main()).render(),
+        ] {
+            let nlink = c.find("%F|%h").expect("link-count check");
+            let last_rp = c.rfind("rp /dev/fd/3").expect("descriptor path check");
+            assert!(last_rp > nlink, "path not re-checked after the link count: {c}");
+            assert!(c.contains("*\" (deleted)\")"), "deleted names not refused: {c}");
+        }
     }
 
     #[test]
