@@ -368,3 +368,33 @@ async fn e2e_256mib_download_bounded_memory() {
         after.saturating_sub(before)
     );
 }
+
+/// Final review #2 against a real host: unreadable paths are errors, never empty successes.
+#[tokio::test]
+async fn e2e_unreadable_paths_are_errors() {
+    let fx = fixture_or_skip!();
+    let e = ctx(&fx, false);
+    let c = &e.ctx;
+    let ls = ssh_files_list(c, list("app", "private")).await.unwrap_err();
+    assert_eq!(ls.code, ErrorCode::RemoteFailure, "{ls:?}");
+    assert!(!ls.message.contains("/srv/app"), "{}", ls.message);
+    assert_eq!(
+        ssh_file_read(c, read("app", "data/locked.bin")).await.unwrap_err().code,
+        ErrorCode::RemoteFailure
+    );
+    assert_eq!(
+        ssh_transfer_download(c, dl("app", "data/locked.bin")).await.unwrap_err().code,
+        ErrorCode::RemoteFailure
+    );
+    let tail = LogsSearchParams {
+        source_id: "root_only".into(),
+        last_bytes: Some(100),
+        ..search("x")
+    };
+    assert_eq!(ssh_logs_search(c, tail).await.unwrap_err().code, ErrorCode::RemoteFailure);
+    let direct = LogsSearchParams {
+        source_id: "root_only".into(),
+        ..search("x")
+    };
+    assert_eq!(ssh_logs_search(c, direct).await.unwrap_err().code, ErrorCode::RemoteFailure);
+}

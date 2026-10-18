@@ -17,7 +17,7 @@ use crate::mcp::results::Detail;
 use crate::ssh::backend::{ExitKind, StreamBudget, classify_ssh_failure};
 use crate::ssh::command::{RemoteCommand, scope_guard};
 use crate::tools::files::{hash_command, parse_hash, scoped};
-use crate::tools::pipeline::read_tool;
+use crate::tools::pipeline::{has_io_error, read_tool, remote_failure};
 use crate::tools::{AppContext, UNTRUSTED};
 
 pub const NEXT_ACTION: &str =
@@ -77,6 +77,9 @@ pub async fn ssh_transfer_download(ctx: &AppContext, p: TransferDownloadParams) 
             let out = run
                 .run_guarded(Some("regular file"), &target, hash_command(&target.absolute, b.max_transfer_bytes))
                 .await?;
+            if out.exit != ExitKind::Code(0) || has_io_error(&out.stderr) {
+                return Err(remote_failure(&out.stderr));
+            }
             let (size, remote_digest) = parse_hash(&out.stdout)?;
             if let Some(exp) = &p.expected_sha256
                 && !exp.eq_ignore_ascii_case(&remote_digest)
@@ -123,10 +126,8 @@ pub async fn ssh_transfer_download(ctx: &AppContext, p: TransferDownloadParams) 
             if outcome.exit != ExitKind::Code(0) {
                 writer.abort().await;
                 if let Some(code) = classify_ssh_failure(&outcome.exit, &outcome.stderr) {
-                    return Err(SentinelError::new(
-                        code,
-                        String::from_utf8_lossy(&outcome.stderr).lines().next().unwrap_or("").to_owned(),
-                    ));
+                    tracing::warn!(stderr = %String::from_utf8_lossy(&outcome.stderr).lines().next().unwrap_or(""), "ssh client failure during transfer");
+                return Err(SentinelError::new(code, "the SSH connection failed during the transfer"));
                 }
                 return Err(source_changed("remote file changed type or became unreadable during transfer"));
             }

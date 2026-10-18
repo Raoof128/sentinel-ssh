@@ -398,3 +398,60 @@ async fn missing_root_on_host_is_reported() {
     assert_eq!(e.code, ErrorCode::RemoteFailure);
     assert!(e.message.contains("registered root does not exist"), "{}", e.message);
 }
+
+/// Final review #2: a permission failure must not become an empty successful result.
+#[tokio::test]
+async fn unreadable_paths_are_errors_not_empty_results() {
+    let ls = FakeBackend::new().on_script(script("find", b"", b"find: '/srv/app/private': Permission denied\n", 1));
+    let e = ssh_files_list(&ctx_with(ls), list("h1", "app", "private")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::RemoteFailure);
+    assert!(e.message.contains("permission denied"), "{}", e.message);
+    let rd = FakeBackend::new().on_script(script(
+        "tail -c",
+        b"523\n\n--SENTINEL--\n",
+        b"tail: cannot open '/srv/app/x' for reading: Permission denied\n",
+        0,
+    ));
+    assert_eq!(
+        ssh_file_read(&ctx_with(rd), read("h1", "app", "x", None, None, None))
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::RemoteFailure
+    );
+    let hs = FakeBackend::new().on_script(script(
+        "sha256sum",
+        b"523\n\n--SENTINEL--\n",
+        b"sha256sum: /srv/app/x: Permission denied\n",
+        1,
+    ));
+    assert_eq!(
+        ssh_file_hash(&ctx_with(hs), hash("h1", "app", "x")).await.unwrap_err().code,
+        ErrorCode::RemoteFailure
+    );
+    let lg = FakeBackend::new().on_script(script(
+        "grep -F",
+        b"",
+        b"tail: cannot open '/var/log/app/api.log' for reading: Permission denied\n",
+        1,
+    ));
+    let e = ssh_logs_search(
+        &ctx_with(lg),
+        LogsSearchParams {
+            last_bytes: Some(100),
+            ..search("h1", "api", "x")
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::RemoteFailure);
+}
+
+/// Final review #7: errors never echo remote paths or stderr verbatim.
+#[tokio::test]
+async fn failure_messages_do_not_echo_remote_paths() {
+    let fake = FakeBackend::new().on_script(script("find", b"", b"find: '/srv/app/secret-dir': Input/output error\n", 1));
+    let e = ssh_files_list(&ctx_with(fake), list("h1", "app", "secret-dir")).await.unwrap_err();
+    assert!(!e.message.contains("/srv/app"), "{}", e.message);
+    assert!(!serde_json::to_string(&e).unwrap().contains("/srv/app"));
+}

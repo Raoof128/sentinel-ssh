@@ -72,12 +72,11 @@ pub async fn ssh_health_check(ctx: &AppContext, p: HealthCheckParams) -> Result<
                         && c != 0
                     {
                         obs["curl_exit"] = c.into();
-                        obs["error"] = String::from_utf8_lossy(&out.stderr)
-                            .trim()
-                            .chars()
-                            .take(300)
-                            .collect::<String>()
-                            .into();
+                        obs["error"] = sentinel_core::scope::display_escape(
+                            &String::from_utf8_lossy(&out.stderr).trim().chars().take(300).collect::<String>(),
+                        )
+                        .into();
+                        obs["content_trust"] = crate::tools::UNTRUSTED.into();
                     }
                     ("http", status == *expect_status && out.exit == ExitKind::Code(0), obs)
                 }

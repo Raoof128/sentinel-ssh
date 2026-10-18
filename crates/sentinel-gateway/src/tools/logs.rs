@@ -12,7 +12,7 @@ use crate::mcp::results::Detail;
 use crate::ssh::backend::ExitKind;
 use crate::ssh::command::RemoteCommand;
 use crate::tools::files::not_found_or_failure;
-use crate::tools::pipeline::read_tool;
+use crate::tools::pipeline::{has_io_error, read_tool};
 use crate::tools::{AppContext, UNTRUSTED, bounded};
 
 pub const MAX_PATTERN_CHARS: usize = 256;
@@ -121,7 +121,8 @@ pub async fn ssh_logs_search(ctx: &AppContext, p: LogsSearchParams) -> Result<Re
                 ExitKind::Code(0) | ExitKind::Code(1) => {}
                 _ => return Err(not_found_or_failure(&out.stderr)),
             }
-            if !out.stderr.is_empty() && String::from_utf8_lossy(&out.stderr).contains("No such file") {
+            // With `tail | grep`, an unreadable log makes tail fail and grep exit 1 ("no match"); only stderr tells.
+            if has_io_error(&out.stderr) {
                 return Err(not_found_or_failure(&out.stderr));
             }
             let text = run.text_lossy(&out.stdout);

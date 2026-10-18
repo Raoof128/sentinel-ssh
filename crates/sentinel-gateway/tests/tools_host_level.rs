@@ -481,3 +481,47 @@ fn redaction_does_not_let_flags_swallow_flags() {
     assert_eq!(redact_args("login password: hunter2"), "login password: [REDACTED]");
     assert_eq!(redact_args("cat /etc/token.d/readme x"), "cat /etc/token.d/readme x");
 }
+
+/// Final review #2: BusyBox ash prints `sh: ps: not found` and the pipeline exits 0.
+#[tokio::test]
+async fn busybox_missing_utility_in_pipeline_is_unsupported() {
+    let fake = FakeBackend::new().on_script(Script {
+        matches: "ps -eo".into(),
+        stdout: vec![],
+        stderr: b"sh: ps: not found\n".to_vec(),
+        exit: 0,
+        delay: Duration::ZERO,
+    });
+    let e = ssh_process_list(&ctx_with(fake), ps("h1")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::CapabilityUnsupported);
+    assert!(e.message.contains(": ps"), "{}", e.message);
+}
+
+#[tokio::test]
+async fn exit_127_without_a_parsable_name_lists_the_candidates() {
+    let fake = FakeBackend::new().on_script(exit_script("df -B1", b"", 127));
+    let e = ssh_disk_usage(&ctx_with(fake), du("h1", "app", None)).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::CapabilityUnsupported);
+    assert!(e.message.contains("du") && e.message.contains("df"), "{}", e.message);
+}
+
+/// Final review #7: SSH client failures must not expose the host address, port or user.
+#[tokio::test]
+async fn ssh_client_failures_do_not_leak_inventory() {
+    let fake = FakeBackend::new().on_script(exit_script(
+        "uname",
+        b"ssh: connect to host 203.0.113.10 port 22: Connection refused\n",
+        255,
+    ));
+    let e = ssh_host_inspect(&ctx_with(fake), inspect("h1")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ConnectionFailed);
+    let s = serde_json::to_string(&e).unwrap();
+    assert!(!s.contains("203.0.113.10") && !s.contains("port 22"), "{s}");
+    let fake = FakeBackend::new().on_script(exit_script(
+        "uname",
+        b"sentinel-observer@203.0.113.10: Permission denied (publickey).\n",
+        255,
+    ));
+    let s = serde_json::to_string(&ssh_host_inspect(&ctx_with(fake), inspect("h1")).await.unwrap_err()).unwrap();
+    assert!(!s.contains("203.0.113.10") && !s.contains("sentinel-observer"), "{s}");
+}

@@ -11,8 +11,9 @@ use sentinel_core::scope::{ScopedPath, display_escape, resolve_scoped};
 use serde::{Deserialize, Serialize};
 
 use crate::mcp::results::Detail;
+use crate::ssh::backend::ExitKind;
 use crate::ssh::command::{MARKER, RemoteCommand, size_guard};
-use crate::tools::pipeline::{ToolRun, read_tool};
+use crate::tools::pipeline::{ToolRun, has_io_error, read_tool};
 use crate::tools::{AppContext, UNTRUSTED, bounded};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -154,6 +155,9 @@ pub async fn ssh_files_list(ctx: &AppContext, p: FilesListParams) -> Result<Resu
                 .flag("-printf")
                 .arg(FIND_FORMAT);
             let out = run.run_guarded(Some("directory"), &target, find).await?;
+            if out.exit != ExitKind::Code(0) || has_io_error(&out.stderr) {
+                return Err(not_found_or_failure(&out.stderr));
+            }
             let mut all = parse_find(&run, &out.stdout);
             all.sort_by(|a, b| a.0.cmp(&b.0));
             let after: Vec<_> = all
@@ -239,6 +243,9 @@ pub async fn ssh_file_read(ctx: &AppContext, p: FileReadParams) -> Result<Result
                         .pipe(RemoteCommand::new("head").flag("-c").num(length as u64)),
                 );
             let out = run.run_guarded(Some("regular file"), &target, main).await?;
+            if out.exit != ExitKind::Code(0) || has_io_error(&out.stderr) {
+                return Err(not_found_or_failure(&out.stderr));
+            }
             let (size, body) = split_header(&out.stdout)?;
             let total_bytes = parse_size(&size)?;
             let encoding = p.encoding.unwrap_or_default();
@@ -296,7 +303,7 @@ pub async fn ssh_file_stat(ctx: &AppContext, p: FileStatParams) -> Result<Result
                 .flag("--")
                 .arg(&target.absolute);
             let out = run.run_guarded(None, &target, stat_cmd).await?;
-            if out.exit != crate::ssh::backend::ExitKind::Code(0) {
+            if out.exit != ExitKind::Code(0) {
                 return Err(not_found_or_failure(&out.stderr));
             }
             let text = run.text_lossy(&out.stdout);
@@ -319,25 +326,7 @@ pub async fn ssh_file_stat(ctx: &AppContext, p: FileStatParams) -> Result<Result
 }
 
 pub(crate) fn not_found_or_failure(stderr: &[u8]) -> SentinelError {
-    let s = String::from_utf8_lossy(stderr);
-    if s.contains("No such file or directory") {
-        SentinelError::new(ErrorCode::NotFound, "path not found")
-    } else if s.contains("Permission denied") {
-        SentinelError::new(
-            ErrorCode::RemoteFailure,
-            "the SSH account cannot read this path (permission denied)",
-        )
-    } else {
-        SentinelError::new(
-            ErrorCode::RemoteFailure,
-            s.lines()
-                .next()
-                .unwrap_or("remote command failed")
-                .chars()
-                .take(300)
-                .collect::<String>(),
-        )
-    }
+    crate::tools::pipeline::remote_failure(stderr)
 }
 
 // ---------- ssh_file_hash ----------
@@ -403,6 +392,9 @@ pub async fn ssh_file_hash(ctx: &AppContext, p: FileHashParams) -> Result<Result
             let out = run
                 .run_guarded(Some("regular file"), &target, hash_command(&target.absolute, max))
                 .await?;
+            if out.exit != ExitKind::Code(0) || has_io_error(&out.stderr) {
+                return Err(not_found_or_failure(&out.stderr));
+            }
             let (bytes, digest) = parse_hash(&out.stdout)?;
             Ok(FileHashData {
                 algorithm: HashAlgorithm::Sha256,

@@ -45,7 +45,8 @@ pub struct ToolRun {
 fn missing_utility_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"(?m)^(?:sh: \d+: |bash: (?:line \d+: )?|/bin/sh: \d+: )?([\w.-]+): (?:not found|command not found)").unwrap()
+        // dash `sh: 1: X: not found`, bash `bash: line 1: X: command not found`, BusyBox ash `sh: X: not found`.
+        Regex::new(r"(?m)^(?:[\w./-]*sh: )?(?:\d+: |line \d+: )?([\w.-]+): (?:not found|command not found)").unwrap()
     })
 }
 
@@ -70,7 +71,14 @@ fn first_line(b: &[u8]) -> String {
 /// because a pipeline exits with its last command's status.
 pub fn classify_remote(cmd: &RemoteCommand, out: &RunOutcome) -> Result<()> {
     if let Some(code) = classify_ssh_failure(&out.exit, &out.stderr) {
-        return Err(SentinelError::new(code, first_line(&out.stderr)));
+        // The client's own message names the address, port and user; keep it in the local log only.
+        tracing::warn!(stderr = %first_line(&out.stderr), "ssh client failure");
+        let msg = match code {
+            ErrorCode::HostKeyChanged => "the host key does not match the key pinned for this host",
+            ErrorCode::AuthenticationFailed => "authentication failed for the configured account",
+            _ => "could not connect to the host",
+        };
+        return Err(SentinelError::new(code, msg));
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
     if out.exit == ExitKind::Code(SCOPE_ESCAPE_EXIT) && stderr.contains(SCOPE_ESCAPE) {
@@ -120,10 +128,16 @@ pub fn classify_remote(cmd: &RemoteCommand, out: &RunOutcome) -> Result<()> {
         .with_detail("utility", c[1].to_string()));
     }
     if out.exit == ExitKind::Code(127) {
-        let prog = cmd.programs().first().copied().unwrap_or("command");
+        let mut candidates: Vec<&str> = cmd
+            .programs()
+            .iter()
+            .copied()
+            .filter(|p| !matches!(*p, "realpath" | "stat" | "printf" | "true"))
+            .collect();
+        candidates.dedup();
         return Err(SentinelError::new(
             ErrorCode::CapabilityUnsupported,
-            format!("remote utility missing: {prog}"),
+            format!("a remote utility is missing (one of: {})", candidates.join(", ")),
         ));
     }
     Ok(())
@@ -282,4 +296,34 @@ pub fn sections(text: &str) -> Vec<&str> {
     text.split(&format!("\n{}\n", crate::ssh::command::MARKER))
         .map(|s| s.trim_matches('\n'))
         .collect()
+}
+
+/// Maps a remote I/O failure to a fixed message. Raw stderr (absolute paths, account details) goes to the local log only.
+pub fn remote_failure(stderr: &[u8]) -> SentinelError {
+    let s = String::from_utf8_lossy(stderr);
+    if s.contains("No such file or directory") {
+        SentinelError::new(ErrorCode::NotFound, "path not found")
+    } else if s.contains("Permission denied") {
+        SentinelError::new(
+            ErrorCode::RemoteFailure,
+            "the SSH account cannot read this path (permission denied)",
+        )
+    } else {
+        tracing::warn!(stderr = %first_line(stderr), "remote command failed");
+        SentinelError::new(ErrorCode::RemoteFailure, "remote command failed; details are in the gateway log")
+    }
+}
+
+/// True when stderr reports that a file could not be opened or read, whatever the pipeline's exit status.
+pub fn has_io_error(stderr: &[u8]) -> bool {
+    let s = String::from_utf8_lossy(stderr);
+    [
+        "Permission denied",
+        "cannot open",
+        "No such file or directory",
+        "Input/output error",
+        "Is a directory",
+    ]
+    .iter()
+    .any(|m| s.contains(m))
 }
