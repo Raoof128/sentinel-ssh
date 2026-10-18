@@ -87,8 +87,31 @@ impl FakeBackend {
             .ok_or_else(|| SentinelError::new(ErrorCode::RemoteFailure, format!("fake: no script for {rendered}")))?;
         match script.error {
             Some(code) => Err(SentinelError::new(code, "fake: scripted transport failure")),
-            None => Ok(script),
+            None => Ok(Self::with_call_marker(script, &rendered)),
         }
+    }
+
+    /// Section markers are random per call. Scripted output writes the placeholder `--SENTINEL--`; it is replaced with
+    /// the marker found in the command, as a real remote shell would print it.
+    fn with_call_marker(mut s: Script, rendered: &str) -> Script {
+        static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re = RE.get_or_init(|| regex::Regex::new(r"--SENTINEL-[0-9a-f]{32}--").unwrap());
+        if let Some(m) = re.find(rendered) {
+            let needle = b"--SENTINEL--";
+            let mut out = Vec::with_capacity(s.stdout.len());
+            let mut i = 0;
+            while i < s.stdout.len() {
+                if s.stdout[i..].starts_with(needle) {
+                    out.extend_from_slice(m.as_str().as_bytes());
+                    i += needle.len();
+                } else {
+                    out.push(s.stdout[i]);
+                    i += 1;
+                }
+            }
+            s.stdout = out;
+        }
+        s
     }
 
     async fn wait(delay: Duration, limit: Duration, cancel: &CancellationToken) -> Result<()> {

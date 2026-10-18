@@ -80,7 +80,7 @@ async fn files_list_parses_newline_in_name() {
     assert_eq!(e.data.entries[2].kind, EntryKind::Dir);
     assert_eq!(e.data.content_trust, "untrusted");
     assert!(
-        fake.calls()[0].contains("case \"$(stat -c %F -- '/srv/app')\" in \"directory\")"),
+        fake.calls()[0].contains("[ \"$(stat -c %F -- '/srv/app')\" = directory ]"),
         "{}",
         fake.calls()[0]
     );
@@ -100,11 +100,12 @@ async fn files_list_paginates_by_raw_name() {
     .await
     .unwrap();
     assert_eq!(e.data.entries.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["a", "b"]);
-    assert_eq!(e.next_cursor.as_deref(), Some("b"));
+    let cursor = e.next_cursor.clone().unwrap();
+    assert_eq!(cursor, sentinel_gateway::tools::files::encode_cursor(b"b"), "cursors are opaque");
     let e = ssh_files_list(
         &ctx,
         FilesListParams {
-            cursor: Some("b".into()),
+            cursor: Some(cursor),
             ..list("h1", "app", "")
         },
     )
@@ -156,7 +157,7 @@ async fn file_read_returns_range_and_eof() {
     assert_eq!(e.data.bytes_returned, 11);
     assert!(!e.data.eof);
     assert!(
-        fake.calls()[0].contains("tail -c '+1' -- '/srv/app/config/app.toml' | head -c 11"),
+        fake.calls()[0].contains("exec 3< 'app.toml'") && fake.calls()[0].ends_with("tail -c '+1' <&3 | head -c 11"),
         "{}",
         fake.calls()[0]
     );
@@ -252,12 +253,12 @@ async fn file_hash_too_large_is_budget_exceeded() {
 
 #[tokio::test]
 async fn logs_search_fixed_string_and_no_match() {
-    let fake = FakeBackend::new().on_script(script("grep -F", b"", b"", 1));
+    let fake = FakeBackend::new().on_script(script("grep -a -F", b"", b"", 1));
     let ctx = ctx_with(fake.clone());
     let e = ssh_logs_search(&ctx, search("h1", "api", "a.*b")).await.unwrap();
     assert!(e.data.matches.is_empty());
     assert!(
-        fake.calls()[0].contains("grep -F -n -m 51 -- 'a.*b' '/var/log/app/api.log'"),
+        fake.calls()[0].contains("enter '/var/log/app'") && fake.calls()[0].ends_with("grep -a -F -n -m 51 -- 'a.*b' <&3"),
         "{}",
         fake.calls()[0]
     );
@@ -265,7 +266,7 @@ async fn logs_search_fixed_string_and_no_match() {
 
 #[tokio::test]
 async fn logs_search_tail_window() {
-    let fake = FakeBackend::new().on("grep -F", b"3:x\n".to_vec());
+    let fake = FakeBackend::new().on("grep -a -F", b"3:x\n".to_vec());
     let ctx = ctx_with(fake.clone());
     let e = ssh_logs_search(
         &ctx,
@@ -278,7 +279,7 @@ async fn logs_search_tail_window() {
     .unwrap();
     assert!(e.data.line_numbers_relative_to_tail);
     assert!(
-        fake.calls()[0].starts_with("tail -c 1000 -- '/var/log/app/api.log' | grep -F -n -m 51 -- 'x'"),
+        fake.calls()[0].ends_with("tail -c 1000 <&3 | grep -a -F -n -m 51 -- 'x'"),
         "{}",
         fake.calls()[0]
     );
@@ -286,7 +287,7 @@ async fn logs_search_tail_window() {
 
 #[tokio::test]
 async fn logs_search_latin1_line_is_replaced_with_warning() {
-    let fake = FakeBackend::new().on("grep -F", b"12:caf\xe9 error\n".to_vec());
+    let fake = FakeBackend::new().on("grep -a -F", b"12:caf\xe9 error\n".to_vec());
     let e = ssh_logs_search(&ctx_with(fake), search("h1", "api", "error")).await.unwrap();
     assert_eq!(e.data.matches[0].line_no, 12);
     assert_eq!(e.data.matches[0].text, "caf\u{FFFD} error");
@@ -299,7 +300,7 @@ async fn logs_search_escapes_terminal_controls_and_caps_matches() {
     for i in 1..=51 {
         out.push_str(&format!("{i}:line \x1b[31m{i}\n"));
     }
-    let fake = FakeBackend::new().on("grep -F", out.into_bytes());
+    let fake = FakeBackend::new().on("grep -a -F", out.into_bytes());
     let e = ssh_logs_search(&ctx_with(fake), search("h1", "api", "line")).await.unwrap();
     assert_eq!(e.data.matches.len(), 50);
     assert!(e.data.match_limit_reached);
@@ -354,9 +355,9 @@ async fn scope_escape_through_parent_symlink_is_denied() {
     assert_eq!(e.code, ErrorCode::PolicyDenied);
     assert!(e.message.contains("outside the registered root"), "{}", e.message);
     let c = &fake.calls()[0];
-    assert!(c.starts_with("r=$(realpath -e -- '/srv/app') || "), "{c}");
-    assert!(c.contains("p=$(realpath -e -- '/srv/app/escape') || "), "{c}");
-    assert!(c.contains("case \"$p/\" in \"$r\"/*) ;;"), "{c}");
+    assert!(c.contains("r=$(rp '/srv/app') || "), "{c}");
+    assert!(c.contains("enter '/srv/app/escape';"), "{c}");
+    assert!(c.contains("inside \"$w\" \"$r\" || deny SENTINEL_SCOPE_ESCAPE 96"), "{c}");
     for (name, res) in [
         ("files_list", ssh_files_list(&ctx, list("h1", "app", "escape/x")).await.map(|_| ())),
         (
@@ -370,11 +371,7 @@ async fn scope_escape_through_parent_symlink_is_denied() {
     ] {
         assert_eq!(res.unwrap_err().code, ErrorCode::PolicyDenied, "{name}");
     }
-    assert!(
-        fake.calls().iter().all(|c| c.starts_with("r=$(realpath -e -- '/srv/app')")),
-        "{:?}",
-        fake.calls()
-    );
+    assert!(fake.calls().iter().all(|c| c.contains("r=$(rp '/srv/app')")), "{:?}", fake.calls());
 }
 
 #[tokio::test]
@@ -383,8 +380,8 @@ async fn root_itself_needs_no_parent_check() {
     let ctx = ctx_with(fake.clone());
     ssh_files_list(&ctx, list("h1", "app", "")).await.unwrap();
     let c = &fake.calls()[0];
-    assert!(c.starts_with("r=$(realpath -e -- '/srv/app') || "), "{c}");
-    assert!(!c.contains("p=$(realpath"), "{c}");
+    assert!(c.contains("r=$(rp '/srv/app') || "), "{c}");
+    assert!(c.contains("enter '/srv/app';") && !c.contains("enter '/srv';"), "{c}");
 }
 
 #[tokio::test]
@@ -431,7 +428,7 @@ async fn unreadable_paths_are_errors_not_empty_results() {
         ErrorCode::RemoteFailure
     );
     let lg = FakeBackend::new().on_script(script(
-        "grep -F",
+        "grep -a -F",
         b"",
         b"tail: cannot open '/var/log/app/api.log' for reading: Permission denied\n",
         1,

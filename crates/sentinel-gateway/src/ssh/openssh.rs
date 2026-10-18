@@ -265,12 +265,21 @@ impl OpenSshBackend {
         o
     }
 
-    pub fn build_argv(&self, host: &HostConfig, cmd: &RemoteCommand) -> Vec<OsString> {
+    /// `limit` also bounds the command on the host: `timeout` kills its whole process group there, so a call blocked on
+    /// the host (a FIFO, a stalled read) cannot outlive its budget after the client gives up.
+    pub fn build_argv(&self, host: &HostConfig, cmd: &RemoteCommand, limit: Duration) -> Vec<OsString> {
         let mut a = self.options(host);
         a.push("--".into());
         a.push(host.address.clone().into());
         // GNU stat %F and every error message we classify are translated under other locales.
-        a.push(format!("LC_ALL=C; export LC_ALL; {}", cmd.render()).into());
+        let secs = limit.as_secs() + u64::from(limit.subsec_nanos() > 0);
+        a.push(
+            format!(
+                "LC_ALL=C; export LC_ALL; exec timeout -k 5 {secs} sh -c {}",
+                sentinel_core::scope::shell_quote(&cmd.render())
+            )
+            .into(),
+        );
         a
     }
 
@@ -417,10 +426,10 @@ impl OpenSshBackend {
         self.ensure_known_hosts(host)
     }
 
-    fn spawn(&self, host: &HostConfig, cmd: &RemoteCommand) -> Result<Child> {
+    fn spawn(&self, host: &HostConfig, cmd: &RemoteCommand, limit: Duration) -> Result<Child> {
         self.preflight(host)?;
         tracing::debug!(host = %host.id, cmd = %cmd.render(), "ssh dispatch");
-        self.base_command(self.build_argv(host, cmd), host)
+        self.base_command(self.build_argv(host, cmd, limit), host)
             .spawn()
             .map_err(|e| SentinelError::new(ErrorCode::ConnectionFailed, format!("cannot start ssh client: {e}")))
     }
@@ -430,7 +439,7 @@ impl OpenSshBackend {
 impl SshBackend for OpenSshBackend {
     async fn run(&self, host: &HostConfig, cmd: &RemoteCommand, budget: &RunBudget, cancel: CancellationToken) -> Result<RunOutcome> {
         let start = Instant::now();
-        let mut child = self.spawn(host, cmd)?;
+        let mut child = self.spawn(host, cmd, budget.timeout)?;
         let (out, t1) = spawn_reader(child.stdout.take().expect("piped stdout"), budget.max_stdout_bytes);
         let (err, t2) = spawn_reader(child.stderr.take().expect("piped stderr"), budget.max_stderr_bytes);
         let waited = tokio::select! {
@@ -471,7 +480,7 @@ impl SshBackend for OpenSshBackend {
         sink: &mut (dyn AsyncWrite + Send + Unpin),
     ) -> Result<StreamOutcome> {
         let start = Instant::now();
-        let mut child = self.spawn(host, cmd)?;
+        let mut child = self.spawn(host, cmd, budget.total_timeout)?;
         let mut stdout = child.stdout.take().expect("piped stdout");
         let (err, t2) = spawn_reader(child.stderr.take().expect("piped stderr"), STDERR_CAP);
         let total = tokio::time::sleep(budget.total_timeout);

@@ -1,6 +1,7 @@
 //! Edge and failure paths across the tools: malformed remote output, optional parameters, transport failures.
 
 use sentinel_core::error::ErrorCode;
+use sentinel_gateway::ssh::command::Marker;
 use sentinel_gateway::tools::AppContext;
 use sentinel_gateway::tools::disk::{DiskUsageParams, ssh_disk_usage};
 use sentinel_gateway::tools::files::{
@@ -36,15 +37,20 @@ const FACTS: [&str; 7] = [
     "PRETTY_NAME=\"Debian\"",
 ];
 
-fn facts_with(i: usize, value: &str) -> String {
+fn sep(mk: &Marker) -> String {
+    format!("\n\n{}\n", mk.as_str())
+}
+
+fn facts_with(mk: &Marker, i: usize, value: &str) -> String {
     let mut f = FACTS.map(String::from);
     f[i] = value.into();
-    f.join("\n\n--SENTINEL--\n")
+    f.join(&sep(mk))
 }
 
 #[test]
 fn host_facts_reject_malformed_sections() {
-    assert!(parse_host_facts(&FACTS.join("\n\n--SENTINEL--\n")).is_ok());
+    let mk = Marker::new();
+    assert!(parse_host_facts(&mk, &FACTS.join(&sep(&mk))).is_ok());
     for (i, bad, what) in [
         (0, "Linux", "uname"),
         (1, "many", "nproc"),
@@ -53,18 +59,18 @@ fn host_facts_reject_malformed_sections() {
         (3, "Swap: 0", "free"),
         (4, "soon", "uptime"),
     ] {
-        let e = parse_host_facts(&facts_with(i, bad)).unwrap_err();
+        let e = parse_host_facts(&mk, &facts_with(&mk, i, bad)).unwrap_err();
         assert_eq!(e.code, ErrorCode::RemoteFailure);
         assert!(e.message.contains(what), "{what}: {}", e.message);
     }
     assert!(
-        parse_host_facts("only one section")
+        parse_host_facts(&mk, "only one section")
             .unwrap_err()
             .message
             .contains("sections missing")
     );
-    let no_os = FACTS[..6].join("\n\n--SENTINEL--\n");
-    assert_eq!(parse_host_facts(&no_os).unwrap().os_pretty_name, None);
+    let no_os = FACTS[..6].join(&sep(&mk));
+    assert_eq!(parse_host_facts(&mk, &no_os).unwrap().os_pretty_name, None);
 }
 
 #[tokio::test]
@@ -83,7 +89,7 @@ async fn disk_usage_rejects_malformed_df_and_warns_on_unreadable_subdirs() {
     assert!(e.message.contains("df columns"), "{}", e.message);
     let denied = FakeBackend::new().on_script(script(
         "df -B1",
-        b"/dev/x 100 50 50 50% /\n\n--SENTINEL--\n8\t/srv/app\x00",
+        b"/dev/x 100 50 50 50% /\n\n--SENTINEL--\n8\t.\x00",
         b"du: cannot read directory '/srv/app/private': Permission denied\n",
         0,
     ));
@@ -200,7 +206,7 @@ async fn service_active_check_and_user_scope_services() {
 
 #[tokio::test]
 async fn logs_validate_windows_and_flag_binary_files() {
-    let ctx = ctx_with(FakeBackend::new().on("grep -F", b"Binary file /var/log/app/api.log matches\n".to_vec()));
+    let ctx = ctx_with(FakeBackend::new().on("grep -a -F", b"Binary file /var/log/app/api.log matches\n".to_vec()));
     let p = || LogsSearchParams {
         host_id: "h1".into(),
         source_id: "api".into(),
@@ -272,7 +278,7 @@ async fn transport_failures_during_a_download_are_typed() {
         ..Default::default()
     };
     let idle = FakeBackend::new().on("sha256sum", hash.clone()).on_script(Script {
-        matches: "cat --".into(),
+        matches: "cat <&3".into(),
         error: Some(ErrorCode::TransferTimeoutIdle),
         ..Default::default()
     });
@@ -281,7 +287,7 @@ async fn transport_failures_during_a_download_are_typed() {
         ErrorCode::TransferTimeoutIdle
     );
     let dropped = FakeBackend::new().on("sha256sum", hash).on_script(script(
-        "cat --",
+        "cat <&3",
         b"",
         b"Connection to 203.0.113.10 closed by remote host.\n",
         255,
@@ -300,4 +306,39 @@ fn context_refuses_an_open_artifact_directory() {
     std::fs::set_permissions(&cfg.gateway.artifact_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     let e = AppContext::new(cfg, std::sync::Arc::new(FakeBackend::new())).err().unwrap();
     assert_eq!(e.code, ErrorCode::ConfigInvalid);
+}
+
+#[tokio::test]
+async fn unenterable_directories_are_typed_by_cause() {
+    let list = |p: &str| FilesListParams {
+        host_id: "h1".into(),
+        root: "app".into(),
+        path: p.into(),
+        ..Default::default()
+    };
+    let cases = [
+        (b"SENTINEL_MISSING\n".as_slice(), 91, ErrorCode::NotFound, "not found"),
+        (
+            b"SENTINEL_NO_ACCESS\n".as_slice(),
+            92,
+            ErrorCode::RemoteFailure,
+            "permission denied",
+        ),
+        (b"SENTINEL_KIND_MISMATCH\n".as_slice(), 97, ErrorCode::PolicyDenied, "are refused"),
+    ];
+    for (stderr, exit, code, msg) in cases {
+        let ctx = ctx_with(FakeBackend::new().on_script(script("find", b"", stderr, exit)));
+        let e = ssh_files_list(&ctx, list("d")).await.unwrap_err();
+        assert_eq!(e.code, code, "exit {exit}");
+        assert!(e.message.contains(msg), "exit {exit}: {}", e.message);
+    }
+    // The marker without its exit status is ordinary remote output, not a refusal.
+    let ctx = ctx_with(FakeBackend::new().on_script(script("find", b"", b"SENTINEL_NO_ACCESS\n", 1)));
+    assert!(
+        !ssh_files_list(&ctx, list("d"))
+            .await
+            .unwrap_err()
+            .message
+            .contains("permission denied")
+    );
 }

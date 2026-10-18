@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::mcp::results::Detail;
 use crate::ssh::backend::ExitKind;
-use crate::ssh::command::{MARKER, RemoteCommand, size_guard};
+use crate::ssh::command::{Marker, Pin, RemoteCommand, entry_name, fd3_size_limit};
 use crate::tools::pipeline::{ToolRun, has_io_error, read_tool};
 use crate::tools::{AppContext, UNTRUSTED, bounded};
 
@@ -45,14 +45,11 @@ pub(crate) fn scoped(run: &ToolRun, root: &str, path: &str) -> Result<ScopedPath
     resolve_scoped(r, path)
 }
 
-/// Splits `<header>\n--SENTINEL--\n<body>` at the first marker, leaving the body bytes exact.
-pub(crate) fn split_header(out: &[u8]) -> Result<(String, &[u8])> {
-    let marker = format!("\n{MARKER}\n");
-    let pos = out
-        .windows(marker.len())
-        .position(|w| w == marker.as_bytes())
-        .ok_or_else(|| SentinelError::new(ErrorCode::RemoteFailure, "unexpected remote output: missing section marker"))?;
-    Ok((String::from_utf8_lossy(&out[..pos]).trim().to_owned(), &out[pos + marker.len()..]))
+/// Splits `<header><marker><body>` at the first marker, leaving the body bytes exact.
+pub(crate) fn split_header<'a>(marker: &Marker, out: &'a [u8]) -> Result<(String, &'a [u8])> {
+    marker
+        .split_header(out)
+        .ok_or_else(|| SentinelError::new(ErrorCode::RemoteFailure, "unexpected remote output: missing section marker"))
 }
 
 fn parse_size(s: &str) -> Result<u64> {
@@ -113,26 +110,39 @@ pub struct FilesListData {
 /// GNU find expands `\t` and `\0` itself; a real NUL byte cannot be passed in a process argument.
 const FIND_FORMAT: &str = r"%y\t%s\t%T@\t%m\t%f\0";
 
-/// Parses NUL-terminated `%y\t%s\t%T@\t%m\t%f` records. Names may contain any byte except NUL and '/'.
-pub fn parse_find(run: &ToolRun, out: &[u8]) -> Vec<(String, FileEntry)> {
+/// Parses NUL-terminated `%y\t%s\t%T@\t%m\t%f` records. Names may contain any byte except NUL and '/'; the raw
+/// bytes are kept for ordering and cursors, so names that differ only in invalid UTF-8 stay distinct.
+pub fn parse_find(run: &ToolRun, out: &[u8]) -> Vec<(Vec<u8>, FileEntry)> {
     out.split(|b| *b == 0)
         .filter(|r| !r.is_empty())
         .filter_map(|rec| {
-            let text = run.text_lossy(rec);
-            let mut f = text.splitn(5, '\t');
-            let (y, s, t, m, name) = (f.next()?, f.next()?, f.next()?, f.next()?, f.next()?);
+            let mut f = rec.splitn(5, |b| *b == b'\t');
+            let (y, sz, t, m, name) = (f.next()?, f.next()?, f.next()?, f.next()?, f.next()?);
+            let txt = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+            let shown = run.text_lossy(name);
             Some((
-                name.to_owned(),
+                name.to_vec(),
                 FileEntry {
-                    name: display_escape(name),
-                    kind: kind_of(y),
-                    bytes: s.parse().unwrap_or(0),
-                    mtime: epoch(t),
-                    mode_octal: m.to_owned(),
+                    name: display_escape(&shown),
+                    kind: kind_of(&txt(y)),
+                    bytes: txt(sz).parse().unwrap_or(0),
+                    mtime: epoch(&txt(t)),
+                    mode_octal: txt(m),
                 },
             ))
         })
         .collect()
+}
+
+/// Cursors are opaque: base64url of the last raw name, so no remote text is echoed outside `data` (red team: raw cursor).
+pub fn encode_cursor(raw: &[u8]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
+}
+
+fn decode_cursor(c: &str) -> Result<Vec<u8>> {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(c)
+        .map_err(|_| SentinelError::new(ErrorCode::InvalidInput, "cursor is not one this tool returned").with_detail("field", "cursor"))
 }
 
 pub async fn ssh_files_list(ctx: &AppContext, p: FilesListParams) -> Result<ResultEnvelope<FilesListData>> {
@@ -147,14 +157,14 @@ pub async fn ssh_files_list(ctx: &AppContext, p: FilesListParams) -> Result<Resu
         |run| async move {
             let target = scoped(&run, &p.root, &p.path)?;
             let find = RemoteCommand::new("find")
-                .arg(&target.absolute)
+                .arg(".")
                 .flag("-mindepth")
                 .num(1)
                 .flag("-maxdepth")
                 .num(1)
                 .flag("-printf")
                 .arg(FIND_FORMAT);
-            let out = run.run_guarded(Some("directory"), &target, find).await?;
+            let out = run.run_pinned(Pin::Dir, &target, Effect::Read, find).await?;
             if out.exit != ExitKind::Code(0) || has_io_error(&out.stderr) {
                 return Err(not_found_or_failure(&out.stderr));
             }
@@ -166,12 +176,10 @@ pub async fn ssh_files_list(ctx: &AppContext, p: FilesListParams) -> Result<Resu
                 run.warn("listing_truncated");
             }
             all.sort_by(|a, b| a.0.cmp(&b.0));
-            let after: Vec<_> = all
-                .into_iter()
-                .filter(|(raw, _)| p.cursor.as_deref().is_none_or(|c| raw.as_str() > c))
-                .collect();
+            let cursor = p.cursor.as_deref().map(decode_cursor).transpose()?;
+            let after: Vec<_> = all.into_iter().filter(|(raw, _)| cursor.as_ref().is_none_or(|c| raw > c)).collect();
             if after.len() > max {
-                run.set_next_cursor(after[max - 1].0.clone());
+                run.set_next_cursor(encode_cursor(&after[max - 1].0));
             }
             let entries = after.into_iter().take(max).map(|(_, e)| e).collect();
             Ok(FilesListData {
@@ -252,25 +260,25 @@ pub async fn ssh_file_read(ctx: &AppContext, p: FileReadParams) -> Result<Result
         |run| async move {
             let target = scoped(&run, &p.root, &p.path)?;
             let offset = p.offset.unwrap_or(0);
+            let mk = Marker::new();
             let main = RemoteCommand::new("stat")
+                .flag("-L")
                 .flag("-c")
                 .flag("%s")
-                .flag("--")
-                .arg(&target.absolute)
-                .then(RemoteCommand::marker())
+                .arg("/dev/fd/3")
+                .then(mk.cmd())
                 .then(
                     RemoteCommand::new("tail")
                         .flag("-c")
                         .arg(&format!("+{}", offset + 1))
-                        .flag("--")
-                        .arg(&target.absolute)
+                        .stdin_fd3()
                         .pipe(RemoteCommand::new("head").flag("-c").num(length as u64)),
                 );
-            let out = run.run_guarded(Some("regular file"), &target, main).await?;
+            let out = run.run_pinned(Pin::File, &target, Effect::Read, main).await?;
             if out.exit != ExitKind::Code(0) || has_io_error(&out.stderr) {
                 return Err(not_found_or_failure(&out.stderr));
             }
-            let (size, body) = split_header(&out.stdout)?;
+            let (size, body) = split_header(&mk, &out.stdout)?;
             let total_bytes = parse_size(&size)?;
             let encoding = p.encoding.unwrap_or_default();
             let at_eof = offset + body.len() as u64 >= total_bytes;
@@ -327,8 +335,8 @@ pub async fn ssh_file_stat(ctx: &AppContext, p: FileStatParams) -> Result<Result
                 .flag("-c")
                 .arg("%F|%s|%a|%U|%G|%Y|%h")
                 .flag("--")
-                .arg(&target.absolute);
-            let out = run.run_guarded(None, &target, stat_cmd).await?;
+                .arg(&entry_name(&target.root_path, &target.absolute));
+            let out = run.run_pinned(Pin::Entry, &target, Effect::Read, stat_cmd).await?;
             if out.exit != ExitKind::Code(0) {
                 return Err(not_found_or_failure(&out.stderr));
             }
@@ -376,23 +384,23 @@ pub struct FileHashData {
     pub bytes: u64,
 }
 
-/// `stat -c %s; marker; sha256sum` behind kind and size guards. Shared with the download tool.
-pub(crate) fn hash_command(absolute: &str, max_bytes: u64) -> RemoteCommand {
-    size_guard(
-        absolute,
+/// Size and SHA-256 of the file pinned on descriptor 3 (see [`Pin::File`]), refused above `max_bytes`. Hashing stdin
+/// also avoids GNU sha256sum's `\\` prefix for names containing a backslash or newline. Shared with the download tool.
+pub(crate) fn hash_command(marker: &Marker, max_bytes: u64) -> RemoteCommand {
+    fd3_size_limit(
         max_bytes,
         RemoteCommand::new("stat")
+            .flag("-L")
             .flag("-c")
             .flag("%s")
-            .flag("--")
-            .arg(absolute)
-            .then(RemoteCommand::marker())
-            .then(RemoteCommand::new("sha256sum").flag("--").arg(absolute)),
+            .arg("/dev/fd/3")
+            .then(marker.cmd())
+            .then(RemoteCommand::new("sha256sum").stdin_fd3()),
     )
 }
 
-pub(crate) fn parse_hash(out: &[u8]) -> Result<(u64, String)> {
-    let (size, rest) = split_header(out)?;
+pub(crate) fn parse_hash(marker: &Marker, out: &[u8]) -> Result<(u64, String)> {
+    let (size, rest) = split_header(marker, out)?;
     let digest = String::from_utf8_lossy(rest)
         .split_whitespace()
         .next()
@@ -415,13 +423,12 @@ pub async fn ssh_file_hash(ctx: &AppContext, p: FileHashParams) -> Result<Result
         |run| async move {
             let target = scoped(&run, &p.root, &p.path)?;
             let max = run.ctx.config.gateway.budgets.max_transfer_bytes;
-            let out = run
-                .run_guarded(Some("regular file"), &target, hash_command(&target.absolute, max))
-                .await?;
+            let mk = Marker::new();
+            let out = run.run_pinned(Pin::File, &target, Effect::Read, hash_command(&mk, max)).await?;
             if out.exit != ExitKind::Code(0) || has_io_error(&out.stderr) {
                 return Err(not_found_or_failure(&out.stderr));
             }
-            let (bytes, digest) = parse_hash(&out.stdout)?;
+            let (bytes, digest) = parse_hash(&mk, &out.stdout)?;
             Ok(FileHashData {
                 algorithm: HashAlgorithm::Sha256,
                 digest,

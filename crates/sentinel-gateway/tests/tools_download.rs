@@ -31,7 +31,7 @@ async fn download_round_trips_binary_without_exposing_bytes() {
     let d = hex_sha256(&data);
     let fake = FakeBackend::new()
         .on("sha256sum", hash_out(data.len(), &d))
-        .on("cat --", data.clone());
+        .on("cat <&3", data.clone());
     let ctx = ctx_with(fake.clone());
     let e = ssh_transfer_download(&ctx, dl("h1", "app", "data/blob.bin", None)).await.unwrap();
     assert_eq!(e.data.bytes, 1_048_576);
@@ -48,7 +48,7 @@ async fn download_round_trips_binary_without_exposing_bytes() {
     assert!(e.evidence.iter().any(|x| x.kind == "remote_digest"));
     assert!(e.evidence.iter().any(|x| x.kind == "local_digest"));
     assert!(
-        fake.calls()[1].contains("in \"regular file\"|\"regular empty file\") cat -- '/srv/app/data/blob.bin'"),
+        fake.calls()[1].contains("exec 3< 'blob.bin'") && fake.calls()[1].ends_with("cat <&3"),
         "{}",
         fake.calls()[1]
     );
@@ -58,7 +58,7 @@ async fn download_round_trips_binary_without_exposing_bytes() {
 async fn zero_byte_file_downloads() {
     let empty = hex_sha256(b"");
     assert!(empty.starts_with("e3b0c442"));
-    let fake = FakeBackend::new().on("sha256sum", hash_out(0, &empty)).on("cat --", Vec::new());
+    let fake = FakeBackend::new().on("sha256sum", hash_out(0, &empty)).on("cat <&3", Vec::new());
     let e = ssh_transfer_download(&ctx_with(fake), dl("h1", "app", "data/empty.bin", None))
         .await
         .unwrap();
@@ -70,7 +70,7 @@ async fn zero_byte_file_downloads() {
 async fn digest_mismatch_leaves_no_artifact() {
     let fake = FakeBackend::new()
         .on("sha256sum", hash_out(3, &"00".repeat(32)))
-        .on("cat --", b"abc".to_vec());
+        .on("cat <&3", b"abc".to_vec());
     let ctx = ctx_with(fake);
     assert_eq!(
         ssh_transfer_download(&ctx, dl("h1", "app", "x", None)).await.unwrap_err().code,
@@ -83,7 +83,7 @@ async fn digest_mismatch_leaves_no_artifact() {
 async fn expected_digest_mismatch_is_source_changed() {
     let fake = FakeBackend::new()
         .on("sha256sum", hash_out(3, &hex_sha256(b"abc")))
-        .on("cat --", b"abc".to_vec());
+        .on("cat <&3", b"abc".to_vec());
     let ctx = ctx_with(fake.clone());
     let e = ssh_transfer_download(&ctx, dl("h1", "app", "x", Some(&"11".repeat(32))))
         .await
@@ -154,7 +154,7 @@ async fn symlink_and_oversize_refused() {
 async fn short_stream_is_transfer_partial() {
     let fake = FakeBackend::new()
         .on("sha256sum", hash_out(10, &"ab".repeat(32)))
-        .on("cat --", b"12345".to_vec());
+        .on("cat <&3", b"12345".to_vec());
     let ctx = ctx_with(fake);
     assert_eq!(
         ssh_transfer_download(&ctx, dl("h1", "app", "x", None)).await.unwrap_err().code,
@@ -167,7 +167,7 @@ async fn short_stream_is_transfer_partial() {
 async fn grown_file_is_source_changed() {
     let fake = FakeBackend::new()
         .on("sha256sum", hash_out(3, &hex_sha256(b"abc")))
-        .on("cat --", b"abcdef".to_vec());
+        .on("cat <&3", b"abcdef".to_vec());
     let ctx = ctx_with(fake);
     assert_eq!(
         ssh_transfer_download(&ctx, dl("h1", "app", "x", None)).await.unwrap_err().code,
@@ -181,7 +181,7 @@ async fn type_swap_during_stream_is_source_changed() {
     let fake = FakeBackend::new()
         .on("sha256sum", hash_out(3, &hex_sha256(b"abc")))
         .on_script(Script {
-            matches: "cat --".into(),
+            matches: "cat <&3".into(),
             stderr: b"SENTINEL_KIND_MISMATCH\n".to_vec(),
             exit: 97,
             delay: Duration::ZERO,

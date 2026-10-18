@@ -68,6 +68,9 @@ path = "/srv/app/logs/api.log"
 [hosts.log_sources.root_only]
 path = "/srv/app/logs/root.log"
 
+[hosts.log_sources.linked]
+path = "/srv/app/logs/linked.log"
+
 [hosts.health_checks.api_http]
 kind = "http"
 url = "http://127.0.0.1:8080/health"

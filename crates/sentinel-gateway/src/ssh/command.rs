@@ -28,19 +28,65 @@ pub const PROGRAMS: &[&str] = &[
     "uname",
 ];
 
-/// Separates sections of multi-command output.
-pub const MARKER: &str = "--SENTINEL--";
-/// `kind_guard` refusal: stderr token and exit status.
+/// Refusals printed by the containment prologue: stderr token and exit status.
 pub const KIND_MISMATCH: &str = "SENTINEL_KIND_MISMATCH";
 pub const KIND_MISMATCH_EXIT: i32 = 97;
-/// `scope_guard` refusals: the target's parent resolves outside the root, or the root itself is missing.
 pub const SCOPE_ESCAPE: &str = "SENTINEL_SCOPE_ESCAPE";
 pub const SCOPE_ESCAPE_EXIT: i32 = 96;
 pub const ROOT_MISSING: &str = "SENTINEL_ROOT_MISSING";
 pub const ROOT_MISSING_EXIT: i32 = 95;
-/// `size_guard` refusal: stderr token and exit status.
+pub const HARDLINK: &str = "SENTINEL_HARDLINK";
+pub const HARDLINK_EXIT: i32 = 94;
+pub const EXCLUDED: &str = "SENTINEL_EXCLUDED";
+pub const EXCLUDED_EXIT: i32 = 93;
+pub const MISSING: &str = "SENTINEL_MISSING";
+pub const MISSING_EXIT: i32 = 91;
+pub const NO_ACCESS: &str = "SENTINEL_NO_ACCESS";
+pub const NO_ACCESS_EXIT: i32 = 92;
 pub const TOO_LARGE: &str = "SENTINEL_TOO_LARGE";
 pub const TOO_LARGE_EXIT: i32 = 98;
+
+/// A per-call section separator. The nonce is random, so remote content (a file or directory name, a log line) cannot
+/// contain it and cannot split or hide sections (red team: marker spoofing).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Marker(String);
+
+impl Marker {
+    pub fn new() -> Self {
+        Self(format!("--SENTINEL-{}--", uuid::Uuid::new_v4().simple()))
+    }
+
+    /// `printf '\n<marker>\n'`
+    pub fn cmd(&self) -> RemoteCommand {
+        RemoteCommand::new("printf").arg(&format!("\n{}\n", self.0))
+    }
+
+    fn separator(&self) -> String {
+        format!("\n{}\n", self.0)
+    }
+
+    /// Splits text into sections, trimming surrounding newlines.
+    pub fn sections<'a>(&self, text: &'a str) -> Vec<&'a str> {
+        text.split(&self.separator()).map(|s| s.trim_matches('\n')).collect()
+    }
+
+    /// Splits at the first marker, leaving the bytes after it exact. `None` if the marker is absent.
+    pub fn split_header<'a>(&self, out: &'a [u8]) -> Option<(String, &'a [u8])> {
+        let sep = self.separator();
+        let pos = out.windows(sep.len()).position(|w| w == sep.as_bytes())?;
+        Some((String::from_utf8_lossy(&out[..pos]).trim().to_owned(), &out[pos + sep.len()..]))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for Marker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteCommand {
@@ -108,73 +154,168 @@ impl RemoteCommand {
         &self.programs
     }
 
-    /// `printf '\n--SENTINEL--\n'`
-    pub fn marker() -> Self {
-        RemoteCommand::new("printf").arg(&format!("\n{MARKER}\n"))
+    /// Reads standard input from descriptor 3, the file a [`Pin::File`] prologue opened and verified.
+    pub fn stdin_fd3(mut self) -> Self {
+        self.text.push_str(" <&3");
+        self
     }
 
-    fn wrap(prefix: String, main: RemoteCommand, suffix: &str) -> Self {
-        let mut programs = vec!["stat"];
+    fn prefixed(prefix: String, extra: &[&'static str], main: RemoteCommand) -> Self {
+        let mut programs = extra.to_vec();
         programs.extend(main.programs);
         Self {
-            text: format!("{prefix}{}{suffix}", main.text),
+            text: format!("{prefix}{}", main.text),
             programs,
         }
     }
 }
 
-/// Runs `main` only if `stat -c %F` (which does not follow a final symlink) reports `expected` for `absolute_path`
-/// ("regular file" also accepts GNU's "regular empty file"). Otherwise prints [`KIND_MISMATCH`] to stderr and exits
-/// [`KIND_MISMATCH_EXIT`].
-pub fn kind_guard(expected: &'static str, absolute_path: &str, main: RemoteCommand) -> RemoteCommand {
-    let pattern = if expected == "regular file" {
-        "\"regular file\"|\"regular empty file\")".to_owned()
-    } else {
-        format!("\"{expected}\")")
-    };
-    RemoteCommand::wrap(
-        format!("case \"$(stat -c %F -- {})\" in {pattern} ", shell_quote(absolute_path)),
-        main,
-        &format!(";; *) echo {KIND_MISMATCH} >&2; exit {KIND_MISMATCH_EXIT};; esac"),
-    )
+/// How a contained command reaches its target once [`contained`] has pinned it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pin {
+    /// The target directory becomes the working directory; the command names it `.`.
+    Dir,
+    /// The target entry itself, not followed; the command runs in its parent and names it by [`entry_name`].
+    Entry,
+    /// The target regular file, opened once on descriptor 3; the command reads only `<&3` or `/dev/fd/3`.
+    File,
 }
 
-/// Containment for root-scoped paths (spec §7.1 #8-10, §9.4). Resolves the root and the target's parent directory with
-/// `realpath -e` on the host and runs the rest only if the parent is the root or inside it, so a symlinked parent
-/// directory cannot lead outside. The final component is then checked with [`kind_guard`] when `expected` is given
-/// (a final symlink is refused there). Check and use are separate commands: a concurrent rename on the host can still
-/// race them, which only the Stage 2 broker's descriptor-relative opens close.
-pub fn scope_guard(root: &str, target: &str, expected: Option<&'static str>, main: RemoteCommand) -> RemoteCommand {
-    let inner = match expected {
-        Some(kind) => kind_guard(kind, target, main),
-        None => main,
+/// Shell helpers shared by every contained command. `rp` is `realpath -e` that keeps a trailing newline in a name
+/// (command substitution would strip it, letting `/srv/app<NL>` pass as `/srv/app`) and refuses names containing one.
+const PRELUDE: &str = "NL='\n'; \
+rp() { o=$(realpath -e -- \"$1\" && echo x) || return 1; o=${o%x}; o=${o%\"$NL\"}; \
+case $o in *\"$NL\"*) return 1;; esac; printf '%s' \"$o\"; }; \
+deny() { echo \"$1\" >&2; exit \"$2\"; }; \
+inside() { case \"$1/\" in \"$2\"/*) return 0;; esac; return 1; }; \
+enter() { cd -P -- \"$1\" 2>/dev/null && return 0; [ -e \"$1\" ] || deny SENTINEL_MISSING 91; \
+[ -d \"$1\" ] && deny SENTINEL_NO_ACCESS 92; deny SENTINEL_KIND_MISMATCH 97; }; ";
+
+/// The name a [`Pin::Entry`] or [`Pin::File`] command uses for its target: the last path component, or `.` for the root.
+pub fn entry_name(root: &str, target: &str) -> String {
+    if target == root {
+        ".".to_owned()
+    } else {
+        target.rsplit('/').next().unwrap_or(".").to_owned()
+    }
+}
+
+fn deny(token: &str, code: i32) -> String {
+    format!("deny {token} {code}")
+}
+
+fn exclusions(var: &str, excluded: &[String]) -> String {
+    excluded
+        .iter()
+        .map(|x| {
+            format!(
+                "if x=$(rp {}); then if inside \"${var}\" \"$x\"; then {}; fi; fi; ",
+                shell_quote(x),
+                deny(EXCLUDED, EXCLUDED_EXIT)
+            )
+        })
+        .collect()
+}
+
+/// Containment for root-scoped paths (spec §7.1 #8-10, §7.3.6 "no scope escape", §9.4).
+///
+/// The target is resolved and pinned on the host before `main` runs, so `main` never resolves the path again:
+/// * the root is resolved with `realpath -e`;
+/// * the shell `cd -P`s into the target directory ([`Pin::Dir`]) or the target's parent, and `pwd -P` must be inside
+///   the resolved root and outside every `excluded` root (roots this call may not read or export);
+/// * for [`Pin::File`] the entry must be a regular file (not a symlink, FIFO or device), is opened once on fd 3, and the
+///   open descriptor itself must resolve inside the root, outside excluded roots, and have exactly one link.
+///
+/// A rename on the host after these checks cannot redirect `main`: directories are used through the working directory
+/// and files through the already-open descriptor.
+pub fn contained(root: &str, target: &str, pin: Pin, excluded: &[String], main: RemoteCommand) -> RemoteCommand {
+    let mut p = String::from(PRELUDE);
+    p.push_str(&format!(
+        "r=$(rp {}) || {}; ",
+        shell_quote(root),
+        deny(ROOT_MISSING, ROOT_MISSING_EXIT)
+    ));
+    let (dir, entry) = match pin {
+        Pin::Dir => (target.to_owned(), None),
+        _ if target == root => (root.to_owned(), Some(".".to_owned())),
+        _ => (
+            target
+                .rsplit_once('/')
+                .map(|(d, _)| d)
+                .filter(|d| !d.is_empty())
+                .unwrap_or("/")
+                .to_owned(),
+            Some(entry_name(root, target)),
+        ),
     };
-    let mut prefix = format!(
-        "r=$(realpath -e -- {}) || {{ echo {ROOT_MISSING} >&2; exit {ROOT_MISSING_EXIT}; }}; ",
-        shell_quote(root)
-    );
-    if target != root {
-        let parent = target.rsplit_once('/').map(|(p, _)| p).filter(|p| !p.is_empty()).unwrap_or("/");
-        prefix.push_str(&format!(
-            "p=$(realpath -e -- {}) || {{ echo {KIND_MISMATCH} >&2; exit {KIND_MISMATCH_EXIT}; }}; \
-             case \"$p/\" in \"$r\"/*) ;; *) echo {SCOPE_ESCAPE} >&2; exit {SCOPE_ESCAPE_EXIT};; esac; ",
-            shell_quote(parent)
+    if pin == Pin::Dir {
+        // lstat first: refuse a final symlink and report a missing or non-directory target clearly.
+        p.push_str(&format!(
+            "[ \"$(stat -c %F -- {})\" = directory ] || {}; ",
+            shell_quote(target),
+            deny(KIND_MISMATCH, KIND_MISMATCH_EXIT)
         ));
     }
-    let mut programs = vec!["realpath"];
-    programs.extend(inner.programs);
-    RemoteCommand {
-        text: format!("{prefix}{}", inner.text),
-        programs,
+    p.push_str(&format!(
+        "enter {}; w=$(rp .) || {}; inside \"$w\" \"$r\" || {}; ",
+        shell_quote(&dir),
+        deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT),
+        deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT)
+    ));
+    p.push_str(&exclusions("w", excluded));
+    if pin == Pin::File {
+        let e = shell_quote(entry.as_deref().unwrap_or("."));
+        p.push_str(&format!(
+            "case \"$(stat -c %F -- {e})\" in \"regular file\"|\"regular empty file\") ;; *) {};; esac; \
+             exec 3< {e}; f=$(rp /dev/fd/3) || {}; inside \"$f\" \"$r\" || {}; ",
+            deny(KIND_MISMATCH, KIND_MISMATCH_EXIT),
+            deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT),
+            deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT)
+        ));
+        p.push_str(&exclusions("f", excluded));
+        p.push_str(&format!(
+            "case \"$(stat -L -c '%F|%h' /dev/fd/3)\" in \"regular file|1\"|\"regular empty file|1\") ;; \
+             \"regular file|\"*|\"regular empty file|\"*) {};; *) {};; esac; ",
+            deny(HARDLINK, HARDLINK_EXIT),
+            deny(KIND_MISMATCH, KIND_MISMATCH_EXIT)
+        ));
     }
+    RemoteCommand::prefixed(p, &["realpath", "stat"], main)
 }
 
-/// Runs `main` only if the file is at most `max_bytes`. Otherwise prints [`TOO_LARGE`] and exits [`TOO_LARGE_EXIT`].
-pub fn size_guard(absolute_path: &str, max_bytes: u64, main: RemoteCommand) -> RemoteCommand {
-    RemoteCommand::wrap(
-        format!("if [ \"$(stat -c %s -- {})\" -le {max_bytes} ]; then ", shell_quote(absolute_path)),
+/// A registered file outside any root (a log source): it must resolve to exactly the configured path, be a regular
+/// file with one link, and is read only through descriptor 3 (red team: log source symlink).
+pub fn exact_file(path: &str, main: RemoteCommand) -> RemoteCommand {
+    let (dir, name) = path
+        .rsplit_once('/')
+        .map(|(d, n)| (if d.is_empty() { "/" } else { d }, n))
+        .unwrap_or(("/", path));
+    let mut p = String::from(PRELUDE);
+    p.push_str(&format!(
+        "enter {d}; w=$(rp .) || {s}; [ \"$w\" = {d} ] || {s}; \
+         case \"$(stat -c %F -- {n})\" in \"regular file\"|\"regular empty file\") ;; *) {k};; esac; \
+         exec 3< {n}; f=$(rp /dev/fd/3) || {s}; [ \"$f\" = {full} ] || {s}; \
+         case \"$(stat -L -c '%F|%h' /dev/fd/3)\" in \"regular file|1\"|\"regular empty file|1\") ;; \
+         \"regular file|\"*|\"regular empty file|\"*) {h};; *) {k};; esac; ",
+        d = shell_quote(dir),
+        n = shell_quote(name),
+        full = shell_quote(path),
+        k = deny(KIND_MISMATCH, KIND_MISMATCH_EXIT),
+        s = deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT),
+        h = deny(HARDLINK, HARDLINK_EXIT),
+    ));
+    RemoteCommand::prefixed(p, &["realpath", "stat"], main)
+}
+
+/// Refuses unless the file open on descriptor 3 is at most `max_bytes` ([`TOO_LARGE`], exit [`TOO_LARGE_EXIT`]).
+pub fn fd3_size_limit(max_bytes: u64, main: RemoteCommand) -> RemoteCommand {
+    RemoteCommand::prefixed(
+        format!(
+            "[ \"$(stat -L -c %s /dev/fd/3)\" -le {max_bytes} ] || {}; ",
+            deny(TOO_LARGE, TOO_LARGE_EXIT)
+        ),
+        &["stat"],
         main,
-        &format!("; else echo {TOO_LARGE} >&2; exit {TOO_LARGE_EXIT}; fi"),
     )
 }
 
@@ -195,23 +336,52 @@ mod tests {
         );
     }
 
-    /// GNU stat reports a zero-byte file as "regular empty file"; a guard on "regular file" must accept it.
     #[test]
-    fn regular_file_guard_accepts_empty_files() {
-        let r = kind_guard("regular file", "/srv/app/e", RemoteCommand::new("true")).render();
-        assert!(r.contains("\"regular file\"|\"regular empty file\")"), "{r}");
-        let d = kind_guard("directory", "/srv/app", RemoteCommand::new("true")).render();
-        assert!(!d.contains("empty"), "{d}");
+    fn file_pins_verify_the_open_descriptor() {
+        let c = contained("/srv/app", "/srv/app/a/b", Pin::File, &[], RemoteCommand::new("cat").stdin_fd3()).render();
+        assert!(c.contains("r=$(rp '/srv/app')"), "{c}");
+        assert!(c.contains("enter '/srv/app/a'; w=$(rp .)"), "{c}");
+        assert!(c.contains("exec 3< 'b'; f=$(rp /dev/fd/3)"), "{c}");
+        assert!(c.contains("\"regular file|1\"|\"regular empty file|1\")"), "{c}");
+        assert!(c.ends_with("cat <&3"), "{c}");
     }
 
     #[test]
-    fn kind_guard_shape() {
-        let r = kind_guard("regular file", "/srv/app/a", RemoteCommand::new("cat").flag("--").arg("/srv/app/a")).render();
+    fn excluded_roots_are_checked_on_the_resolved_paths() {
+        let c = contained(
+            "/srv/app",
+            "/srv/app/x",
+            Pin::File,
+            &["/srv/app/logs".into()],
+            RemoteCommand::new("true"),
+        )
+        .render();
         assert!(
-            r.starts_with("case \"$(stat -c %F -- '/srv/app/a')\" in \"regular file\"|\"regular empty file\") cat -- '/srv/app/a';; *)"),
-            "{r}"
+            c.contains("if x=$(rp '/srv/app/logs'); then if inside \"$w\" \"$x\"; then deny SENTINEL_EXCLUDED 93"),
+            "{c}"
         );
-        assert!(r.ends_with("exit 97;; esac"), "{r}");
+        assert!(c.contains("if inside \"$f\" \"$x\""), "{c}");
+    }
+
+    #[test]
+    fn the_root_itself_is_its_own_entry() {
+        assert_eq!(entry_name("/srv/app", "/srv/app"), ".");
+        assert_eq!(entry_name("/srv/app", "/srv/app/a/b"), "b");
+        let c = contained("/srv/app", "/srv/app", Pin::Entry, &[], RemoteCommand::new("stat").arg(".")).render();
+        assert!(c.contains("enter '/srv/app';"), "{c}");
+    }
+
+    #[test]
+    fn markers_are_unique_and_split_exactly() {
+        let (a, b) = (Marker::new(), Marker::new());
+        assert_ne!(a, b);
+        let text = format!("one\n\n{}\n\ntwo\n", a.as_str());
+        assert_eq!(a.sections(&text), ["one", "two"]);
+        assert_eq!(b.sections(&text).len(), 1, "another call's marker is just text");
+        let out = format!("3\n{}\nab\n", a.as_str());
+        let (head, body) = a.split_header(out.as_bytes()).unwrap();
+        assert_eq!((head.as_str(), body), ("3", &b"ab\n"[..]));
+        assert!(a.split_header(b"no marker").is_none());
     }
 
     #[test]
@@ -231,7 +401,7 @@ mod tests {
         let c = RemoteCommand::new("du")
             .flag("-x")
             .pipe(RemoteCommand::new("sort"))
-            .then(RemoteCommand::marker());
+            .then(Marker::new().cmd());
         assert_eq!(c.programs(), ["du", "sort", "printf"]);
     }
 }

@@ -965,6 +965,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -972,6 +973,7 @@ name = "sentinel-testkit"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "regex",
  "sentinel-core",
  "sentinel-gateway",
  "tempfile",

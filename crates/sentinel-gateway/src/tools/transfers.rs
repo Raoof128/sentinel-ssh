@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::artifacts::{ArtifactOrigin, ContentKind};
 use crate::mcp::results::Detail;
 use crate::ssh::backend::{ExitKind, StreamBudget, classify_ssh_failure};
-use crate::ssh::command::{RemoteCommand, scope_guard};
+use crate::ssh::command::{Marker, Pin, RemoteCommand, contained};
 use crate::tools::files::{hash_command, parse_hash, scoped};
 use crate::tools::pipeline::{has_io_error, read_tool, remote_failure};
 use crate::tools::{AppContext, UNTRUSTED};
@@ -74,13 +74,12 @@ pub async fn ssh_transfer_download(ctx: &AppContext, p: TransferDownloadParams) 
         |run| async move {
             let target = scoped(&run, &p.root, &p.path)?;
             let b = &run.ctx.config.gateway.budgets;
-            let out = run
-                .run_guarded(Some("regular file"), &target, hash_command(&target.absolute, b.max_transfer_bytes))
-                .await?;
+            let mk = Marker::new();
+            let out = run.run_pinned(Pin::File, &target, Effect::Export, hash_command(&mk, b.max_transfer_bytes)).await?;
             if out.exit != ExitKind::Code(0) || has_io_error(&out.stderr) {
                 return Err(remote_failure(&out.stderr));
             }
-            let (size, remote_digest) = parse_hash(&out.stdout)?;
+            let (size, remote_digest) = parse_hash(&mk, &out.stdout)?;
             // The remote size guard already refused larger files; this also covers spoofed or changed output.
             if size > b.max_transfer_bytes {
                 return Err(SentinelError::new(ErrorCode::BudgetExceeded, "file exceeds the configured transfer size limit"));
@@ -106,13 +105,10 @@ pub async fn ssh_transfer_download(ctx: &AppContext, p: TransferDownloadParams) 
                 total_timeout: Duration::from_secs(b.transfer_total_timeout_secs),
                 max_bytes: size,
             };
-            // Guarded again: the path could have been swapped for a symlink after hashing.
-            let cat = scope_guard(
-                &target.root_path,
-                &target.absolute,
-                Some("regular file"),
-                RemoteCommand::new("cat").flag("--").arg(&target.absolute),
-            );
+            // Pinned again for the stream: whatever is read is inside the root, and the digest check below proves it is the
+            // same content that was hashed.
+            let excluded = run.excluded_for_export(&target);
+            let cat = contained(&target.root_path, &target.absolute, Pin::File, &excluded, RemoteCommand::new("cat").stdin_fd3());
             let streamed = run
                 .ctx
                 .backend

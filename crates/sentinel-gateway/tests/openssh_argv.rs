@@ -39,7 +39,7 @@ fn mode(p: &std::path::Path) -> u32 {
 fn argv_is_fully_controlled() {
     let (dirs, cfg) = setup();
     let b = OpenSshBackend::new(&cfg.gateway).unwrap();
-    let argv = b.build_argv(&host(&cfg), &RemoteCommand::new("true"));
+    let argv = b.build_argv(&host(&cfg), &RemoteCommand::new("true"), Duration::from_secs(30));
     let run = dirs.run.path().display().to_string();
     let id = cfg.hosts[0].auth_identity().unwrap().display().to_string();
     let hash = regex::Regex::new("(c|kh)-[0-9a-f]{20}").unwrap();
@@ -65,7 +65,10 @@ fn argv_is_fully_controlled() {
     ] {
         assert!(joined.contains(req), "{req}");
     }
-    assert_eq!(s[s.len() - 3..], ["--", "203.0.113.10", "LC_ALL=C; export LC_ALL; true"]);
+    assert_eq!(
+        s[s.len() - 3..],
+        ["--", "203.0.113.10", "LC_ALL=C; export LC_ALL; exec timeout -k 5 30 sh -c 'true'"]
+    );
     insta::assert_debug_snapshot!(s);
 }
 
@@ -327,7 +330,7 @@ fn control_path_binds_trust_identity() {
     }
     assert_eq!(b.control_path(&base.clone()), p0, "stable for the same trust identity");
     let argv: Vec<String> = b
-        .build_argv(&base, &RemoteCommand::new("true"))
+        .build_argv(&base, &RemoteCommand::new("true"), Duration::from_secs(30))
         .iter()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
@@ -358,13 +361,17 @@ async fn concurrent_runs_to_one_host_all_succeed() {
     assert!(failures.is_empty(), "{} of 32 failed: {:?}", failures.len(), failures.first());
 }
 
-/// Final review #8: remote output (stat %F, error text) is locale-dependent; every command runs under LC_ALL=C.
+/// Final review #8 and red team (FIFO hang, leaked remote processes): every remote command runs under LC_ALL=C and
+/// inside a remote `timeout`, so a command blocked on the host is killed there even after the client gave up.
 #[test]
-fn remote_command_pins_c_locale() {
+fn remote_commands_pin_the_locale_and_are_bounded_on_the_host() {
     let (_dirs, cfg) = setup();
     let b = OpenSshBackend::new(&cfg.gateway).unwrap();
-    let argv = b.build_argv(&host(&cfg), &RemoteCommand::new("true"));
-    assert_eq!(argv.last().unwrap().to_string_lossy(), "LC_ALL=C; export LC_ALL; true");
+    let argv = b.build_argv(&host(&cfg), &RemoteCommand::new("true"), Duration::from_millis(29_500));
+    assert_eq!(
+        argv.last().unwrap().to_string_lossy(),
+        "LC_ALL=C; export LC_ALL; exec timeout -k 5 30 sh -c 'true'"
+    );
 }
 
 /// Final review #4: agent auth must not let OpenSSH fall back to ~/.ssh/id_* on disk.
@@ -375,7 +382,7 @@ fn agent_auth_disables_default_identity_files() {
     let mut h = host(&cfg);
     h.auth = sentinel_gateway::config::AuthConfig::Agent { public_key: None };
     let argv: Vec<String> = b
-        .build_argv(&h, &RemoteCommand::new("true"))
+        .build_argv(&h, &RemoteCommand::new("true"), Duration::from_secs(30))
         .iter()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
@@ -553,7 +560,7 @@ fn unmultiplexed_backend_never_uses_a_master() {
     let (_dirs, cfg) = setup();
     let b = OpenSshBackend::unmultiplexed(&cfg.gateway).unwrap();
     let argv: Vec<String> = b
-        .build_argv(&host(&cfg), &RemoteCommand::new("true"))
+        .build_argv(&host(&cfg), &RemoteCommand::new("true"), Duration::from_secs(30))
         .iter()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
@@ -578,7 +585,7 @@ fn agent_auth_can_be_restricted_to_one_public_key() {
         public_key: Some(pubkey.clone()),
     };
     let argv: Vec<String> = b
-        .build_argv(&h, &RemoteCommand::new("true"))
+        .build_argv(&h, &RemoteCommand::new("true"), Duration::from_secs(30))
         .iter()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();

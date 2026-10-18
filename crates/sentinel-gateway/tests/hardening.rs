@@ -28,10 +28,7 @@ fn script(matches: &str, stdout: &[u8], stderr: &[u8], exit: i32) -> Script {
 /// A filename with a newline must not split into a fake du entry.
 #[tokio::test]
 async fn du_output_is_nul_separated() {
-    let fake = FakeBackend::new().on(
-        "df -B1",
-        b"/dev/x 100 50 50 50% /\n\n--SENTINEL--\n9\t/srv/app\x005\t/srv/app/a\nb\x00".to_vec(),
-    );
+    let fake = FakeBackend::new().on("df -B1", b"/dev/x 100 50 50 50% /\n\n--SENTINEL--\n9\t.\x005\t./a\nb\x00".to_vec());
     let ctx = ctx_with(fake.clone());
     let e = ssh_disk_usage(
         &ctx,
@@ -120,7 +117,7 @@ fn host_key_type_must_match_its_blob() {
 /// Newer GNU grep reports binary matches on stderr.
 #[tokio::test]
 async fn grep_binary_notice_on_stderr_is_a_warning() {
-    let fake = FakeBackend::new().on_script(script("grep -F", b"", b"grep: /var/log/app/api.log: binary file matches\n", 0));
+    let fake = FakeBackend::new().on_script(script("grep -a -F", b"", b"grep: /var/log/app/api.log: binary file matches\n", 0));
     let e = ssh_logs_search(
         &ctx_with(fake),
         LogsSearchParams {

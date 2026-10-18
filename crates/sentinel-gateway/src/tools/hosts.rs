@@ -9,8 +9,8 @@ use sentinel_core::scope::display_escape;
 use serde::{Deserialize, Serialize};
 
 use crate::mcp::results::Detail;
-use crate::ssh::command::RemoteCommand;
-use crate::tools::pipeline::{local_tool, read_tool, sections};
+use crate::ssh::command::{Marker, RemoteCommand};
+use crate::tools::pipeline::{local_tool, read_tool};
 use crate::tools::{AppContext, bounded};
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -92,20 +92,20 @@ pub struct HostFacts {
     pub os_pretty_name: Option<String>,
 }
 
-fn command() -> RemoteCommand {
+fn command(mk: &Marker) -> RemoteCommand {
     RemoteCommand::new("uname")
         .flag("-srm")
-        .then(RemoteCommand::marker())
+        .then(mk.cmd())
         .then(RemoteCommand::new("nproc"))
-        .then(RemoteCommand::marker())
+        .then(mk.cmd())
         .then(RemoteCommand::new("cat").arg("/proc/loadavg"))
-        .then(RemoteCommand::marker())
+        .then(mk.cmd())
         .then(RemoteCommand::new("free").flag("-b"))
-        .then(RemoteCommand::marker())
+        .then(mk.cmd())
         .then(RemoteCommand::new("cat").arg("/proc/uptime"))
-        .then(RemoteCommand::marker())
+        .then(mk.cmd())
         .then(RemoteCommand::new("hostname"))
-        .then(RemoteCommand::marker())
+        .then(mk.cmd())
         .then(RemoteCommand::new("cat").arg("/etc/os-release"))
 }
 
@@ -113,8 +113,8 @@ fn parse_err(what: &str) -> SentinelError {
     SentinelError::new(ErrorCode::RemoteFailure, format!("unexpected remote output: {what}"))
 }
 
-pub fn parse_host_facts(text: &str) -> Result<HostFacts> {
-    let s = sections(text);
+pub fn parse_host_facts(mk: &Marker, text: &str) -> Result<HostFacts> {
+    let s = mk.sections(text);
     if s.len() < 6 {
         return Err(parse_err("host facts sections missing"));
     }
@@ -173,8 +173,9 @@ pub async fn ssh_host_inspect(ctx: &AppContext, p: HostInspectParams) -> Result<
         ResourceRef::Host,
         Effect::Read,
         |run| async move {
-            let out = run.run(&command()).await?;
-            parse_host_facts(&run.text_lossy(&out.stdout))
+            let mk = Marker::new();
+            let out = run.run(&command(&mk)).await?;
+            parse_host_facts(&mk, &run.text_lossy(&out.stdout))
         },
     )
     .await

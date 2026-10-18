@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::mcp::results::Detail;
 use crate::ssh::backend::ExitKind;
-use crate::ssh::command::RemoteCommand;
+use crate::ssh::command::{RemoteCommand, exact_file};
 use crate::tools::files::not_found_or_failure;
 use crate::tools::pipeline::{has_io_error, read_tool};
 use crate::tools::{AppContext, UNTRUSTED, bounded};
@@ -99,23 +99,21 @@ pub async fn ssh_logs_search(ctx: &AppContext, p: LogsSearchParams) -> Result<Re
                 .get(&p.source_id)
                 .map(|l| l.path.clone())
                 .ok_or_else(|| SentinelError::new(ErrorCode::PolicyDenied, format!("unknown log source '{}'", p.source_id)))?;
-            let grep = |file: Option<&str>| {
-                let g = RemoteCommand::new("grep")
-                    .flag("-F")
-                    .flag("-n")
-                    .flag("-m")
-                    .num(max as u64 + 1)
-                    .flag("--")
-                    .arg(&p.pattern);
-                match file {
-                    Some(f) => g.arg(f),
-                    None => g,
-                }
+            // -a: a NUL byte must not turn the log into "binary" and hide every match (red team).
+            let grep = RemoteCommand::new("grep")
+                .flag("-a")
+                .flag("-F")
+                .flag("-n")
+                .flag("-m")
+                .num(max as u64 + 1)
+                .flag("--")
+                .arg(&p.pattern);
+            let main = match p.last_bytes {
+                Some(b) => RemoteCommand::new("tail").flag("-c").num(b).stdin_fd3().pipe(grep),
+                None => grep.stdin_fd3(),
             };
-            let cmd = match p.last_bytes {
-                Some(b) => RemoteCommand::new("tail").flag("-c").num(b).flag("--").arg(&path).pipe(grep(None)),
-                None => grep(Some(&path)),
-            };
+            // The log is read through a pinned descriptor: a symlink, hardlink or FIFO planted at its path is refused.
+            let cmd = exact_file(&path, main);
             let out = run.run(&cmd).await?;
             match out.exit {
                 ExitKind::Code(0) | ExitKind::Code(1) => {}

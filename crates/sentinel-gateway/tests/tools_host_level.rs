@@ -262,7 +262,11 @@ async fn disk_usage_is_root_scoped() {
     let fake = FakeBackend::new().on("df -B1", include_bytes!("fixtures/du.txt").to_vec());
     let ctx = ctx_with(fake.clone());
     let e = ssh_disk_usage(&ctx, du("h1", "app", Some("data"))).await.unwrap();
-    assert!(fake.calls()[0].contains("-- '/srv/app/data'"), "{}", fake.calls()[0]);
+    assert!(
+        fake.calls()[0].contains("enter '/srv/app/data'") && fake.calls()[0].contains("du -x -P -a -0 -B1 -d 1 -- '.'"),
+        "{}",
+        fake.calls()[0]
+    );
     // e2e finding: `du -d N` lists only directories; -a is needed for files.
     assert!(fake.calls()[0].contains("du -x -P -a -0 -B1"), "{}", fake.calls()[0]);
     assert_eq!(e.data.entries[0].path, "data/blob.bin");
@@ -439,15 +443,14 @@ async fn disk_usage_refuses_symlink_target() {
     let e = ssh_disk_usage(&ctx, du("h1", "app", Some("escape"))).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::PolicyDenied);
     assert!(e.message.contains("not a directory"), "{}", e.message);
-    assert!(fake.calls()[0].contains("in \"directory\")"), "{}", fake.calls()[0]);
+    assert!(fake.calls()[0].contains("= directory ]"), "{}", fake.calls()[0]);
     assert!(fake.calls()[0].contains("du -x -P"), "{}", fake.calls()[0]);
 }
 
 #[tokio::test]
 async fn disk_usage_drops_paths_outside_root() {
     let out =
-        b"/dev/vda1 100 50 50 50% /\n\n--SENTINEL--\n9000\t/srv/app\x005000\t/etc/shadow\x004000\t/srv/app/data\x00/srv/application\t1\x00"
-            .to_vec();
+        b"/dev/vda1 100 50 50 50% /\n\n--SENTINEL--\n9000\t.\x005000\t/etc/shadow\x004000\t./data\x00/srv/application\t1\x00".to_vec();
     let fake = FakeBackend::new().on("df -B1", out);
     let e = ssh_disk_usage(&ctx_with(fake), du("h1", "app", None)).await.unwrap();
     assert_eq!(e.data.entries.iter().map(|x| x.path.as_str()).collect::<Vec<_>>(), ["data"]);

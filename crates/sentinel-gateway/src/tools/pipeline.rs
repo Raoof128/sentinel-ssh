@@ -17,8 +17,8 @@ use crate::config::HostConfig;
 use crate::jobs::operations::RunningOp;
 use crate::ssh::backend::{ExitKind, RunBudget, RunOutcome, classify_ssh_failure};
 use crate::ssh::command::{
-    KIND_MISMATCH, KIND_MISMATCH_EXIT, ROOT_MISSING, ROOT_MISSING_EXIT, RemoteCommand, SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT, TOO_LARGE,
-    TOO_LARGE_EXIT, scope_guard,
+    EXCLUDED, EXCLUDED_EXIT, HARDLINK, HARDLINK_EXIT, KIND_MISMATCH, KIND_MISMATCH_EXIT, MISSING, MISSING_EXIT, NO_ACCESS, NO_ACCESS_EXIT,
+    Pin, ROOT_MISSING, ROOT_MISSING_EXIT, RemoteCommand, SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT, TOO_LARGE, TOO_LARGE_EXIT, contained,
 };
 use crate::tools::AppContext;
 
@@ -85,6 +85,27 @@ pub fn classify_remote(cmd: &RemoteCommand, out: &RunOutcome) -> Result<()> {
         return Err(SentinelError::new(
             ErrorCode::PolicyDenied,
             "path resolves outside the registered root (symlinked directory)",
+        ));
+    }
+    if out.exit == ExitKind::Code(MISSING_EXIT) && stderr.contains(MISSING) {
+        return Err(SentinelError::new(ErrorCode::NotFound, "path not found"));
+    }
+    if out.exit == ExitKind::Code(NO_ACCESS_EXIT) && stderr.contains(NO_ACCESS) {
+        return Err(SentinelError::new(
+            ErrorCode::RemoteFailure,
+            "the SSH account cannot read this path (permission denied)",
+        ));
+    }
+    if out.exit == ExitKind::Code(HARDLINK_EXIT) && stderr.contains(HARDLINK) {
+        return Err(SentinelError::new(
+            ErrorCode::PolicyDenied,
+            "hard-linked files are refused (the file has more than one name)",
+        ));
+    }
+    if out.exit == ExitKind::Code(EXCLUDED_EXIT) && stderr.contains(EXCLUDED) {
+        return Err(SentinelError::new(
+            ErrorCode::PolicyDenied,
+            "the path is inside a root this principal may not access",
         ));
     }
     if out.exit == ExitKind::Code(ROOT_MISSING_EXIT) && stderr.contains(ROOT_MISSING) {
@@ -160,12 +181,18 @@ impl ToolRun {
         Ok(out)
     }
 
-    /// Runs `main` behind a [`scope_guard`]: the target must resolve inside its root and, when `expected` is given, be
-    /// of that file type. A type mismatch becomes `POLICY_DENIED: target is not a <expected>`.
-    pub async fn run_guarded(&self, expected: Option<&'static str>, target: &ScopedPath, main: RemoteCommand) -> Result<RunOutcome> {
-        self.run(&scope_guard(&target.root_path, &target.absolute, expected, main))
+    /// Runs `main` behind [`contained`]: the target is pinned inside its root (and outside every root this `effect` may
+    /// not reach) before `main` runs. A type mismatch becomes `POLICY_DENIED: target is not a <kind>`.
+    pub async fn run_pinned(&self, pin: Pin, target: &ScopedPath, effect: Effect, main: RemoteCommand) -> Result<RunOutcome> {
+        let excluded = self.excluded_roots(target, effect);
+        let kind = match pin {
+            Pin::Dir => Some("directory"),
+            Pin::File => Some("regular file"),
+            Pin::Entry => None,
+        };
+        self.run(&contained(&target.root_path, &target.absolute, pin, &excluded, main))
             .await
-            .map_err(|e| match expected {
+            .map_err(|e| match kind {
                 Some(kind) if e.code == ErrorCode::PolicyDenied && e.message.starts_with("target has an unexpected file type") => {
                     SentinelError::new(
                         ErrorCode::PolicyDenied,
@@ -174,6 +201,27 @@ impl ToolRun {
                 }
                 _ => e,
             })
+    }
+
+    pub fn excluded_for_export(&self, target: &ScopedPath) -> Vec<String> {
+        self.excluded_roots(target, Effect::Export)
+    }
+
+    /// Paths of this host's roots that `effect` may not reach (red team: nested roots). A more restricted root nested
+    /// inside, or reachable through, the requested root stays closed.
+    fn excluded_roots(&self, target: &ScopedPath, effect: Effect) -> Vec<String> {
+        let Some(hp) = self.ctx.policy.host(&self.ctx.principal, &self.host.id) else {
+            return Vec::new();
+        };
+        hp.roots
+            .values()
+            .filter(|r| r.path != target.root_path)
+            .filter(|r| match effect {
+                Effect::Export => !(r.read && r.export),
+                _ => !r.read,
+            })
+            .map(|r| r.path.clone())
+            .collect()
     }
 
     /// Lossy UTF-8; records the `non_utf8_replaced` warning once if any replacement happened.
@@ -308,13 +356,6 @@ where
             Err(e.with_operation(op.id.as_str()))
         }
     }
-}
-
-/// Splits output written as `section\n--SENTINEL--\nsection…`. Sections are trimmed of surrounding newlines.
-pub fn sections(text: &str) -> Vec<&str> {
-    text.split(&format!("\n{}\n", crate::ssh::command::MARKER))
-        .map(|s| s.trim_matches('\n'))
-        .collect()
 }
 
 /// Maps a remote I/O failure to a fixed message. Raw stderr (absolute paths, account details) goes to the local log only.

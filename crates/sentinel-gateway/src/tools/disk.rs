@@ -9,8 +9,8 @@ use sentinel_core::scope::{display_escape, resolve_scoped};
 use serde::{Deserialize, Serialize};
 
 use crate::mcp::results::Detail;
-use crate::ssh::command::RemoteCommand;
-use crate::tools::pipeline::{read_tool, sections};
+use crate::ssh::command::{Marker, Pin, RemoteCommand};
+use crate::tools::pipeline::read_tool;
 use crate::tools::{AppContext, bounded};
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -94,12 +94,13 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
         |run| async move {
             let root = run.ctx.policy.root(&run.ctx.principal, &run.host.id, &p.root)?.clone();
             let target = resolve_scoped(&root, p.path.as_deref().unwrap_or(""))?;
+            let mk = Marker::new();
             let cmd = RemoteCommand::new("df")
                 .flag("-B1")
                 .flag("-P")
                 .flag("--")
-                .arg(&target.absolute)
-                .then(RemoteCommand::marker())
+                .arg(".")
+                .then(mk.cmd())
                 .then(
                     RemoteCommand::new("du")
                         .flag("-x")
@@ -112,33 +113,37 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
                         .flag("-d")
                         .num(depth as u64)
                         .flag("--")
-                        .arg(&target.absolute)
+                        .arg(".")
                         .pipe(RemoteCommand::new("sort").flag("-z").flag("-rn"))
                         .pipe(RemoteCommand::new("head").flag("-z").flag("-n").num(max_entries as u64 + 2)),
                 );
-            let out = run.run_guarded(Some("directory"), &target, cmd).await?;
+            let out = run.run_pinned(Pin::Dir, &target, Effect::Read, cmd).await?;
             if String::from_utf8_lossy(&out.stderr).contains("Permission denied") {
                 run.warn("partial_permission_denied");
             }
             let text = run.text_lossy(&out.stdout);
-            let s = sections(&text);
-            let filesystem = parse_df(s.first().copied().unwrap_or(""))?;
-            let root_prefix = format!("{}/", root.path);
-            let target_prefix = format!("{}/", target.absolute.trim_end_matches('/'));
+            // Split once at the first marker: df's line comes first and is not remote-controlled; the rest is NUL records.
+            let (df_text, du_bytes) = mk.split_header(text.as_bytes()).ok_or_else(|| bad("missing section marker"))?;
+            let du_text = String::from_utf8_lossy(du_bytes).into_owned();
+            let filesystem = parse_df(&df_text)?;
+
             let mut total_bytes = 0;
             let mut entries = Vec::new();
-            for line in s.get(1).copied().unwrap_or("").split('\0').filter(|r| !r.is_empty()) {
+            for line in du_text.split('\0').filter(|r| !r.is_empty()) {
                 let Some((bytes, path)) = line.split_once('\t') else { continue };
                 let Ok(bytes) = bytes.trim().parse::<u64>() else { continue };
-                if path == target.absolute {
+                // du ran in the pinned directory: "." is the target itself, "./x" its children. Anything else is dropped.
+                if path == "." {
                     total_bytes = bytes;
                     continue;
                 }
-                // Only paths inside the requested directory; anything else is dropped, never shown raw.
-                if !path.starts_with(&target_prefix) {
-                    continue;
-                }
-                let Some(rel) = path.strip_prefix(&root_prefix) else { continue };
+                let Some(child) = path.strip_prefix("./") else { continue };
+                let rel = if target.relative.is_empty() {
+                    child.to_owned()
+                } else {
+                    format!("{}/{child}", target.relative)
+                };
+                let rel = rel.as_str();
                 entries.push(DiskEntry {
                     path: display_escape(rel),
                     bytes,

@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = "0.1.92"
+regex = "1.13.1"
 sentinel-core = { version = "0.1.0", path = "../sentinel-core" }
 sentinel-gateway = { version = "0.1.0", path = "../sentinel-gateway" }
 tempfile = "3.27.0"
