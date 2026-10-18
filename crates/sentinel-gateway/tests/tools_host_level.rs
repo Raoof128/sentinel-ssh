@@ -461,3 +461,17 @@ fn redaction_covers_header_schemes_dash_values_and_bare_keywords() {
     assert_eq!(redact_args("expect-login password hunter2"), "expect-login password [REDACTED]");
     assert_eq!(redact_args("nginx -g daemon off;"), "nginx -g daemon off;");
 }
+
+/// Security review 2026-10-18 (third pass): a keyword flag must not swallow the next flag as its value, and a bare
+/// keyword must be an exact word, not any word containing one.
+#[test]
+fn redaction_does_not_let_flags_swallow_flags() {
+    assert_eq!(redact_args("app --auth --password hunter2"), "app --auth --password [REDACTED]");
+    assert_eq!(
+        redact_args("python3 auth_server.py --token abc"),
+        "python3 auth_server.py --token [REDACTED]"
+    );
+    assert_eq!(redact_args("app --token --verbose"), "app --token --verbose");
+    assert_eq!(redact_args("app token abc"), "app token [REDACTED]");
+    assert_eq!(redact_args("app tokenizer abc"), "app tokenizer abc");
+}

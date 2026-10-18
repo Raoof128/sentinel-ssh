@@ -62,7 +62,7 @@ struct Redactors {
     bearer: Regex,
     header: Regex,
     assign: Regex,
-    flag_space: Regex,
+    keyword_flag: Regex,
     url: Regex,
     key_like: Regex,
     mysql_p: Regex,
@@ -78,8 +78,8 @@ fn redactors() -> &'static Redactors {
         // The scheme word and the credential both go: `Authorization: token X`.
         header: Regex::new(r"(?i)\b((?:proxy-)?authorization|x-api-key|api-key)(:\s*)(\S+(?:\s+[^\s-]\S*)?)").unwrap(),
         assign: Regex::new(&format!(r"(?i)([^\s=:&?]*{KW}[^\s=:&?]*)(=)([^\s&]+)")).unwrap(),
-        // Bare keywords too, and values that start with '-' (`--password -abc`).
-        flag_space: Regex::new(&format!(r"(?i)((?:^|\s)-{{0,2}}[\w.-]*{KW}[\w.-]*)(\s+)(\S+)")).unwrap(),
+        // A whole token that is a credential-ish flag (`--db-password`, `-token`); its value is the next token.
+        keyword_flag: Regex::new(&format!(r"(?i)^-{{1,2}}[\w.-]*{KW}[\w.-]*$")).unwrap(),
         url: Regex::new(r"(://[^/\s:@]+:)[^@\s/]+@").unwrap(),
         key_like: Regex::new(r"(?i)([\w-]*key[\w-]*)(=)(\S{8,})").unwrap(),
         mysql_p: Regex::new(r"(\s-p)(\S+)").unwrap(),
@@ -111,10 +111,51 @@ pub fn redact_args(args: &str) -> String {
         s = r.mysql_p.replace_all(&s, format!("${{1}}{REDACTED}")).into_owned();
     }
     s = r.url.replace_all(&s, format!("${{1}}{REDACTED}@")).into_owned();
-    for re in [&r.bearer, &r.header, &r.assign, &r.flag_space, &r.key_like] {
+    for re in [&r.bearer, &r.header, &r.assign, &r.key_like] {
         s = re.replace_all(&s, keep_redacted).into_owned();
     }
-    s
+    redact_flag_values(&s, &r.keyword_flag)
+}
+
+/// Bare words that announce a following secret. Exact match only: `tokenizer` or `auth_server.py` are not keywords.
+const BARE_KEYWORDS: [&str; 10] = [
+    "password",
+    "passwd",
+    "pwd",
+    "pass",
+    "token",
+    "secret",
+    "apikey",
+    "api_key",
+    "api-key",
+    "credentials",
+];
+
+/// Redacts the token after a credential flag or bare keyword. A following long flag (`--x`) is never taken as the value,
+/// so `--auth --password hunter2` still reaches `--password`; a single-dash value (`--password -abc`) is.
+fn redact_flag_values(s: &str, keyword_flag: &Regex) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut redact_next = false;
+    let mut rest = s;
+    while !rest.is_empty() {
+        let ws = rest.len() - rest.trim_start().len();
+        out.push_str(&rest[..ws]);
+        rest = &rest[ws..];
+        if rest.is_empty() {
+            break;
+        }
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let tok = &rest[..end];
+        rest = &rest[end..];
+        if redact_next && !tok.starts_with("--") {
+            out.push_str(if tok == REDACTED { tok } else { REDACTED });
+            redact_next = false;
+            continue;
+        }
+        out.push_str(tok);
+        redact_next = keyword_flag.is_match(tok) || BARE_KEYWORDS.contains(&tok.to_ascii_lowercase().as_str());
+    }
+    out
 }
 
 fn valid_user(u: &str) -> bool {
