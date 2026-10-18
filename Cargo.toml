@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+rust-version = "1.97"
+
+[workspace.dependencies]
+sentinel-core = { path = "crates/sentinel-core" }
+sentinel-gateway = { path = "crates/sentinel-gateway" }
+sentinel-testkit = { path = "crates/sentinel-testkit" }

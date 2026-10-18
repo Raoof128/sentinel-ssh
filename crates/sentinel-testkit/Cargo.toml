@@ -1,0 +1,14 @@
+[package]
+name = "sentinel-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait = "0.1.92"
+sentinel-core = { version = "0.1.0", path = "../sentinel-core" }
+sentinel-gateway = { version = "0.1.0", path = "../sentinel-gateway" }
+tempfile = "3.27.0"
+tokio = { version = "1.53.3", features = ["rt", "sync", "time", "io-util"] }
+tokio-util = "0.7.20"
