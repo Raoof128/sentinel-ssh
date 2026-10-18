@@ -403,3 +403,29 @@ async fn e2e_nested_unreadable_root_is_invisible_through_its_parent() {
     let read = ssh_file_read(c, read("app", "vault/inner.txt")).await.unwrap_err();
     assert_eq!(read.code, ErrorCode::PolicyDenied, "{read:?}");
 }
+
+#[tokio::test]
+async fn e2e_process_list_shows_the_host_not_the_gateway() {
+    use sentinel_gateway::tools::processes::{ProcessListParams, ssh_process_list};
+    let fx = fixture_or_skip!();
+    let e = ctx(&fx);
+    let p = ssh_process_list(
+        &e.ctx,
+        ProcessListParams {
+            host_id: "fx".into(),
+            limit: Some(200),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(p.data.processes.iter().any(|x| x.command == "sshd"), "{:?}", p.data.processes);
+    // Other sessions' sshd processes (earlier tests' persistent masters) are legitimately listed; this call's own
+    // shell, its children and its timeout wrapper are not.
+    for x in &p.data.processes {
+        assert!(
+            !x.args_redacted.contains("SENTINEL") && !matches!(x.command.as_str(), "ps" | "head" | "timeout"),
+            "the gateway's own process is listed: {x:?}"
+        );
+    }
+}

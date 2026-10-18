@@ -302,7 +302,19 @@ impl ServerHandler for SentinelServer {
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, ErrorData> {
         let tcc = ToolCallContext::new(self, request, context);
-        self.router.call(tcc).await
+        let mut response = self.router.call(tcc).await?;
+        // Failures are typed envelopes, not protocol errors; isError tells a client that reads nothing else (red team L5).
+        if let CallToolResponse::Complete(result) = &mut response
+            && let Some(outcome) = result
+                .structured_content
+                .as_ref()
+                .and_then(|v| v.get("outcome"))
+                .and_then(|o| o.as_str())
+            && matches!(outcome, "failed" | "cancelled" | "outcome_unknown")
+        {
+            result.is_error = Some(true);
+        }
+        Ok(response)
     }
 
     async fn list_tools(

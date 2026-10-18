@@ -99,15 +99,16 @@ impl PolicyEngine {
 
     fn evaluate_on_host(&self, hp: &HostPolicy, resource: &ResourceRef, effect: Effect) -> Decision {
         match (resource, effect) {
+            // An unreadable root is not listed by ssh_hosts_list, so it answers exactly like an unregistered alias:
+            // a denial must not confirm that it exists (red team L3).
             (ResourceRef::Root(alias), Effect::Read) => match hp.roots.get(*alias) {
                 Some(r) if r.read => Decision::Allow,
-                Some(_) => Decision::deny(format!("read not permitted for root '{alias}'")),
-                None => Decision::deny(format!("unknown root '{alias}'")),
+                _ => Decision::deny(format!("unknown root '{alias}'")),
             },
             (ResourceRef::Root(alias), Effect::Export) => match hp.roots.get(*alias) {
                 Some(r) if r.read && r.export => Decision::Allow,
-                Some(_) => Decision::deny(format!("export not permitted for root '{alias}'")),
-                None => Decision::deny(format!("unknown root '{alias}'")),
+                Some(r) if r.read => Decision::deny(format!("export not permitted for root '{alias}'")),
+                _ => Decision::deny(format!("unknown root '{alias}'")),
             },
             (ResourceRef::Host, Effect::Read) => Decision::Allow,
             (ResourceRef::Service(id), Effect::Read) => registered(&hp.services, id, "service"),
@@ -135,6 +136,7 @@ impl PolicyEngine {
             .ok_or_else(|| SentinelError::new(ErrorCode::PolicyDenied, HOST_UNAVAILABLE))?;
         hp.roots
             .get(alias)
+            .filter(|r| r.read)
             .ok_or_else(|| SentinelError::new(ErrorCode::PolicyDenied, format!("unknown root '{alias}'")))
     }
 }

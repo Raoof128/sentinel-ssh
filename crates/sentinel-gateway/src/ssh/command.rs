@@ -162,6 +162,13 @@ impl RemoteCommand {
         self
     }
 
+    /// `printf '%s\n' "$$"`: the remote shell's own pid, so its processes can be told apart from the host's.
+    pub fn shell_pid() -> Self {
+        let mut c = RemoteCommand::new("printf").arg("%s\n");
+        c.text.push_str(" \"$$\"");
+        c
+    }
+
     /// Reads standard input from descriptor 3, the file a [`Pin::File`] prologue opened and verified.
     pub fn stdin_fd3(mut self) -> Self {
         self.text.push_str(" <&3");

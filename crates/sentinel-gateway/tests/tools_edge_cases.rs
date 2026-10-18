@@ -233,7 +233,7 @@ async fn logs_validate_windows_and_flag_binary_files() {
 
 #[tokio::test]
 async fn process_list_filters_sorts_and_skips_malformed_rows() {
-    let fake = FakeBackend::new().on("ps -", b"1 2 3\n 5 1 app 0.0 0.0 1 x x\n".to_vec());
+    let fake = FakeBackend::new().on("ps -", b"9999\n--SENTINEL--\n1 2 3\n 5 1 app 0.0 0.0 1 x x\n".to_vec());
     let ctx = ctx_with(fake.clone());
     let e = ssh_process_list(
         &ctx,
@@ -259,7 +259,7 @@ async fn process_list_filters_sorts_and_skips_malformed_rows() {
     .unwrap();
     let calls = fake.calls();
     assert!(
-        calls[0].starts_with("ps -u 'app' -o ") && calls[0].contains("--sort=-pmem"),
+        calls[0].contains("ps -u 'app' -o ") && calls[0].contains("--sort=-pmem"),
         "{}",
         calls[0]
     );

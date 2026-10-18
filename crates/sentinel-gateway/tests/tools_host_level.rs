@@ -186,7 +186,8 @@ async fn systemctl_in_container_without_systemd_init_is_unsupported() {
 async fn process_list_redacts_and_paginates() {
     let fake = FakeBackend::new().on(
         "ps -eo",
-        b"  1 0 root 0.0 0.1 5000 systemd /sbin/init\n 42 1 app 3.5 1.2 300 node node server.js --token=abc123SECRET\n".to_vec(),
+        b"9999\n--SENTINEL--\n  1 0 root 0.0 0.1 5000 systemd /sbin/init\n 42 1 app 3.5 1.2 300 node node server.js --token=abc123SECRET\n"
+            .to_vec(),
     );
     let ctx = ctx_with(fake.clone());
     let e = ssh_process_list(
@@ -203,7 +204,7 @@ async fn process_list_redacts_and_paginates() {
     assert_eq!(e.data.processes[1].command, "node");
     assert_eq!(e.data.processes[1].args_redacted, "node server.js --token=[REDACTED]");
     assert_eq!(e.data.content_trust, "untrusted");
-    assert!(fake.calls()[0].contains("head -n 10"));
+    assert!(fake.calls()[0].contains("head -n 26"));
     assert_eq!(
         ssh_process_list(
             &ctx,
@@ -251,7 +252,7 @@ fn redaction_examples() {
 
 #[tokio::test]
 async fn process_list_non_utf8_args_do_not_fail() {
-    let fake = FakeBackend::new().on("ps -eo", b" 7 1 app 0.0 0.0 1 x caf\xe9\n".to_vec());
+    let fake = FakeBackend::new().on("ps -eo", b"9999\n--SENTINEL--\n 7 1 app 0.0 0.0 1 x caf\xe9\n".to_vec());
     let e = ssh_process_list(&ctx_with(fake), ps("h1")).await.unwrap();
     assert!(e.warnings.contains(&"non_utf8_replaced".to_string()));
     assert_eq!(e.data.processes[0].args_redacted, "caf\u{FFFD}");
@@ -594,4 +595,41 @@ fn redaction_corpus_red_team_m4() {
             assert_eq!(out, keep);
         }
     }
+}
+
+/// Red team L2: the gateway's own shell, its children, the remote timeout wrapper and the session sshd are not the
+/// host's workload; listing them leaks the prologue (root paths) and wastes the limit.
+#[tokio::test]
+async fn process_list_hides_the_gateways_own_processes() {
+    let out = b"4242\n--SENTINEL--\n\
+  1 0 root 0.0 0.1 5000 systemd /sbin/init\n\
+100 1 root 0.0 0.1 400 sshd sshd: sentinel [priv]\n\
+101 100 sentinel 0.0 0.1 400 sshd-session sshd: sentinel@notty\n\
+102 101 sentinel 0.0 0.0 1 timeout timeout -k 5 30 sh -c r=$(rp '/srv/app')\n\
+4242 102 sentinel 0.0 0.0 1 sh sh -c r=$(rp '/srv/app')\n\
+4243 4242 sentinel 0.0 0.0 1 ps ps -eo pid=\n\
+4244 4242 sentinel 0.0 0.0 1 head head -n 26\n\
+500 1 www 1.0 2.0 9000 nginx nginx: worker\n"
+        .to_vec();
+    let fake = FakeBackend::new().on("ps -eo", out);
+    let ctx = ctx_with(fake.clone());
+    let e = ssh_process_list(
+        &ctx,
+        ProcessListParams {
+            limit: Some(10),
+            ..ps("h1")
+        },
+    )
+    .await
+    .unwrap();
+    let pids: Vec<u32> = e.data.processes.iter().map(|p| p.pid).collect();
+    assert_eq!(pids, [1, 100, 500]);
+    // Head of the remote list leaves room for the processes that are filtered out.
+    assert!(fake.calls()[0].contains("head -n 26"), "{}", fake.calls()[0]);
+    // Without the shell's pid the output cannot be trusted to be ours.
+    let bare = FakeBackend::new().on("ps -eo", b"  1 0 root 0.0 0.1 5000 systemd /sbin/init\n".to_vec());
+    assert_eq!(
+        ssh_process_list(&ctx_with(bare), ps("h1")).await.unwrap_err().code,
+        ErrorCode::RemoteFailure
+    );
 }

@@ -137,6 +137,7 @@ async fn modern_discover_and_catalogue() {
     }
     let r = s.rpc_modern("tools/call", json!({"name": "ssh_hosts_list", "arguments": {}})).await;
     assert_eq!(r["result"]["structuredContent"]["data"]["hosts"][0]["host_id"], "h1", "{r}");
+    assert_ne!(r["result"]["isError"], true, "a success is not an error: {r}");
     assert!(s.shutdown().await.success(), "server exits cleanly on EOF");
 }
 
@@ -198,6 +199,8 @@ async fn policy_denial_surfaces_typed_error() {
     assert!(r["error"].is_null(), "policy denial must be a result, not a protocol error: {r}");
     let sc = &r["result"]["structuredContent"];
     assert_eq!(sc["outcome"], "failed", "{r}");
+    // Red team L5: a client that only reads isError still sees the failure.
+    assert_eq!(r["result"]["isError"], true, "{r}");
     assert_eq!(sc["error"]["code"], "POLICY_DENIED");
     assert_eq!(sc["retry"]["strategy"], "never");
     assert!(sc["data"].is_null());

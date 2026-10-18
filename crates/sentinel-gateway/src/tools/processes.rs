@@ -12,9 +12,10 @@ use sentinel_core::scope::display_escape;
 use serde::{Deserialize, Serialize};
 
 use crate::mcp::results::Detail;
-use crate::ssh::command::RemoteCommand;
+use crate::ssh::command::{Marker, RemoteCommand};
 use crate::tools::pipeline::read_tool;
 use crate::tools::{AppContext, UNTRUSTED, bounded};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -216,6 +217,44 @@ fn redact_flag_values(s: &str, keyword_flag: &Regex) -> String {
     out
 }
 
+/// Extra rows requested so that hiding the gateway's own processes does not shorten the list.
+const OWN_PROCESS_SLACK: u64 = 16;
+
+/// Drops the gateway's own processes (red team L2): the remote shell and everything it started (`ps`, `head`), the
+/// `timeout` wrapper above it, and the session's sshd with every channel under it (other gateway commands sharing the
+/// multiplexed connection). The walk up stops at anything else, so the host's own processes are never swept in.
+fn without_own(procs: Vec<ProcessSummary>, shell: u32) -> Vec<ProcessSummary> {
+    let by_pid: HashMap<u32, &ProcessSummary> = procs.iter().map(|p| (p.pid, p)).collect();
+    let mut roots = vec![shell];
+    let mut own: HashSet<u32> = HashSet::from([shell]);
+    let mut cur = by_pid.get(&shell).map(|p| p.ppid);
+    while let Some(parent) = cur.and_then(|pid| by_pid.get(&pid)) {
+        if parent.command == "timeout" {
+            own.insert(parent.pid);
+            cur = Some(parent.ppid);
+        } else {
+            if parent.command.starts_with("sshd") && parent.pid != 1 {
+                roots.push(parent.pid);
+                own.insert(parent.pid);
+            }
+            break;
+        }
+    }
+    // Descendants of the shell and of the session, to any depth, whatever order the list is in.
+    let mut reached: HashSet<u32> = roots.into_iter().collect();
+    let mut grown = true;
+    while grown {
+        grown = false;
+        for p in &procs {
+            if reached.contains(&p.ppid) && reached.insert(p.pid) {
+                own.insert(p.pid);
+                grown = true;
+            }
+        }
+    }
+    procs.into_iter().filter(|p| !own.contains(&p.pid)).collect()
+}
+
 fn valid_user(u: &str) -> bool {
     let b = u.as_bytes();
     !b.is_empty()
@@ -277,13 +316,24 @@ pub async fn ssh_process_list(ctx: &AppContext, p: ProcessListParams) -> Result<
                 ProcessSort::Mem => "--sort=-pmem",
                 ProcessSort::Pid => "--sort=pid",
             };
-            let cmd = ps
-                .flag("pid=,ppid=,user=,pcpu=,pmem=,etimes=,comm=,args=")
-                .flag(sort)
-                .pipe(RemoteCommand::new("head").flag("-n").num(limit as u64));
+            let mk = Marker::new();
+            let cmd = RemoteCommand::shell_pid().then(mk.cmd()).then(
+                ps.flag("pid=,ppid=,user=,pcpu=,pmem=,etimes=,comm=,args=")
+                    .flag(sort)
+                    .pipe(RemoteCommand::new("head").flag("-n").num(limit as u64 + OWN_PROCESS_SLACK)),
+            );
             let out = run.run(&cmd).await?;
+            let text = run.text_lossy(&out.stdout);
+            let (shell, rest) = mk
+                .split_header(text.as_bytes())
+                .ok_or_else(|| SentinelError::new(ErrorCode::RemoteFailure, "unexpected remote output: process list"))?;
+            let shell: u32 = shell
+                .parse()
+                .map_err(|_| SentinelError::new(ErrorCode::RemoteFailure, "unexpected remote output: shell pid"))?;
+            let mut processes = without_own(parse_ps(&String::from_utf8_lossy(rest)), shell);
+            processes.truncate(limit as usize);
             Ok(ProcessListData {
-                processes: parse_ps(&run.text_lossy(&out.stdout)),
+                processes,
                 content_trust: UNTRUSTED,
             })
         },

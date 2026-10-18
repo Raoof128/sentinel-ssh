@@ -233,3 +233,28 @@ fn control_on_host_resources_is_denied() {
         ));
     }
 }
+
+/// Red team L3: a root the principal cannot read is not listed by ssh_hosts_list, so a denial must not confirm that it
+/// exists. It answers exactly like an unregistered alias, for either effect.
+#[test]
+fn unreadable_root_is_indistinguishable_from_an_unknown_one() {
+    let e = engine();
+    for effect in [Effect::Read, Effect::Export] {
+        let secret = e.evaluate(&observer(), Some(&h("h1")), &ResourceRef::Root("secrets"), effect);
+        let nope = e.evaluate(&observer(), Some(&h("h1")), &ResourceRef::Root("nope"), effect);
+        assert_eq!(
+            secret,
+            Decision::Deny {
+                reason: "unknown root 'secrets'".into()
+            }
+        );
+        assert_eq!(
+            nope,
+            Decision::Deny {
+                reason: "unknown root 'nope'".into()
+            }
+        );
+    }
+    let looked_up = e.root(&observer(), &h("h1"), "secrets").unwrap_err();
+    assert_eq!(looked_up.message, "unknown root 'secrets'");
+}
