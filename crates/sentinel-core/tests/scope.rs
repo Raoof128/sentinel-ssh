@@ -69,3 +69,27 @@ fn display_escapes_controls_and_bidi() {
     assert_eq!(display_escape("new\nline"), "new\\u{A}line");
     assert_eq!(display_escape("\u{200b}\u{2066}\u{9b}"), "\\u{200B}\\u{2066}\\u{9B}");
 }
+
+#[test]
+fn display_escapes_all_format_and_separator_chars() {
+    // Zl, Zp and Cf characters (security review 2026-10-18): separators, Arabic letter mark, BOM, invisible operators,
+    // deprecated format chars, soft hyphen, interlinear annotation and Unicode tag characters.
+    for c in [
+        '\u{2028}',
+        '\u{2029}',
+        '\u{061C}',
+        '\u{FEFF}',
+        '\u{2060}',
+        '\u{2064}',
+        '\u{206A}',
+        '\u{206F}',
+        '\u{00AD}',
+        '\u{180E}',
+        '\u{FFF9}',
+        '\u{E0001}',
+        '\u{E0041}',
+    ] {
+        let shown = display_escape(&format!("a{c}b"));
+        assert_eq!(shown, format!("a\\u{{{:X}}}b", c as u32), "U+{:04X} not escaped", c as u32);
+    }
+}

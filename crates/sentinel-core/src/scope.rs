@@ -66,16 +66,39 @@ pub fn shell_quote(s: &str) -> String {
     out
 }
 
+/// Cc (controls), Cf (format), Zl and Zp characters. Cf is listed explicitly from the Unicode 16 general-category table
+/// rather than pulling in a Unicode-data crate.
 fn needs_escape(c: char) -> bool {
     let u = c as u32;
-    u < 0x20
-        || (0x7f..=0x9f).contains(&u)
-        || (0x200b..=0x200f).contains(&u)
-        || (0x202a..=0x202e).contains(&u)
-        || (0x2066..=0x2069).contains(&u)
+    matches!(
+        u,
+        0x00..=0x1f
+            | 0x7f..=0x9f
+            | 0xad
+            | 0x0600..=0x0605
+            | 0x061c
+            | 0x06dd
+            | 0x070f
+            | 0x0890..=0x0891
+            | 0x08e2
+            | 0x180e
+            | 0x200b..=0x200f
+            | 0x2028..=0x202e
+            | 0x2060..=0x2064
+            | 0x2066..=0x206f
+            | 0xfeff
+            | 0xfff9..=0xfffb
+            | 0x110bd
+            | 0x110cd
+            | 0x13430..=0x1343f
+            | 0x1bca0..=0x1bca3
+            | 0x1d173..=0x1d17a
+            | 0xe0001
+            | 0xe0020..=0xe007f
+    )
 }
 
-/// Escapes control, C1, zero-width and bidirectional-override characters so a displayed name cannot mislead (spec §9.4, §9.7).
+/// Escapes control, format (zero-width, bidirectional, tag), line- and paragraph-separator characters so a displayed name cannot mislead (spec §9.4, §9.7).
 pub fn display_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
