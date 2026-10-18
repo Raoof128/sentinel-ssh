@@ -328,20 +328,29 @@ pub fn contained(root: &str, target: &str, pin: Pin, excluded: &[String], main: 
         // Again after the link count: see `fd_path`.
         p.push_str(&fd_inside);
     }
-    RemoteCommand::prefixed(p, &["realpath", "stat"], main)
+    RemoteCommand::prefixed(p, &["realpath", "readlink", "stat"], main)
 }
 
-/// Sets `$f` to the real path of the file open on descriptor 3, refusing a name the kernel reports as deleted.
+/// Sets `$f` to the real path of the file open on descriptor 3, and proves that path is the descriptor's own live name.
 ///
 /// Run both before and after [`link_count_is_one`]. A hard link to a secret, opened while the attacker's in-root name
 /// existed, passes the first path check; the attacker then unlinks that name, the link count drops to 1, and the
-/// count check passes too. An unlinked name never comes back, so a second check that still finds a live path inside
-/// the root proves that name existed, and was the only one, when the count was taken. Linux shows an unlinked
-/// descriptor's path with a " (deleted)" suffix; a real file named that way is refused as well, so a decoy cannot pose
-/// as the live name (red team: swap race).
+/// count check passes too. An unlinked name never comes back, so a second check that still finds the descriptor's
+/// live in-root name proves that name existed, and was the only one, when the count was taken (red team: swap race).
+///
+/// Three checks make "the descriptor's live name" exact:
+/// - Linux shows an unlinked descriptor's name with a " (deleted)" suffix. That is tested on the **raw** link text
+///   from `readlink`, never on the `realpath` result: realpath would follow an attacker's symlink named
+///   "<name> (deleted)" to an in-root decoy, and the suffix would vanish (security review).
+/// - The resolved path must equal the raw text. The kernel reports a canonical path, so any difference means a
+///   symlink is involved.
+/// - That path must name the descriptor's own inode (`%d:%i`), not merely some file inside the root.
 fn fd_path() -> String {
     format!(
-        "f=$(rp /dev/fd/3) || {s}; case \"$f\" in *\" (deleted)\") {s};; esac; ",
+        "l=$(readlink /dev/fd/3 && echo x) || {s}; l=${{l%x}}; l=${{l%\"$NL\"}}; \
+         case $l in *\"$NL\"*|*\" (deleted)\") {s};; esac; \
+         f=$(rp /dev/fd/3) || {s}; [ \"$f\" = \"$l\" ] || {s}; \
+         [ \"$(stat -L -c %d:%i /dev/fd/3)\" = \"$(stat -c %d:%i -- \"$f\")\" ] || {s}; ",
         s = deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT)
     )
 }
@@ -376,7 +385,7 @@ pub fn exact_file(path: &str, main: RemoteCommand) -> RemoteCommand {
         fd = fd_path(),
         one = link_count_is_one(),
     ));
-    RemoteCommand::prefixed(p, &["realpath", "stat"], main)
+    RemoteCommand::prefixed(p, &["realpath", "readlink", "stat"], main)
 }
 
 /// Refuses unless the file open on descriptor 3 is at most `max_bytes` ([`TOO_LARGE`], exit [`TOO_LARGE_EXIT`]).
@@ -420,6 +429,15 @@ mod tests {
             let last_rp = c.rfind("rp /dev/fd/3").expect("descriptor path check");
             assert!(last_rp > nlink, "path not re-checked after the link count: {c}");
             assert!(c.contains("*\" (deleted)\")"), "deleted names not refused: {c}");
+            // The suffix test runs on the raw link text: realpath would follow a decoy symlink named "<x> (deleted)".
+            assert!(c.contains("l=$(readlink /dev/fd/3 && echo x)"), "raw descriptor link not read: {c}");
+            assert!(c.contains("case $l in"), "suffix tested on the resolved path only: {c}");
+            // And the checked name must be the descriptor's own inode, not merely an in-root name.
+            assert!(c.contains("[ \"$f\" = \"$l\" ]"), "resolved path not bound to the raw link: {c}");
+            assert!(
+                c.contains("stat -L -c %d:%i /dev/fd/3") && c.contains("stat -c %d:%i -- \"$f\""),
+                "no inode binding: {c}"
+            );
         }
     }
 
@@ -476,7 +494,7 @@ mod tests {
         let c = contained("/srv/app", "/srv/app/a/b", Pin::File, &[], RemoteCommand::new("cat").stdin_fd3()).render();
         assert!(c.contains("r=$(rp '/srv/app')"), "{c}");
         assert!(c.contains("enter '/srv/app/a'; w=$(rp .)"), "{c}");
-        assert!(c.contains("exec 3< 'b'; f=$(rp /dev/fd/3)"), "{c}");
+        assert!(c.contains("exec 3< 'b'; l=$(readlink /dev/fd/3 && echo x)"), "{c}");
         assert!(c.contains("\"regular file|1\"|\"regular empty file|1\")"), "{c}");
         assert!(c.ends_with("cat <&3"), "{c}");
     }

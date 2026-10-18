@@ -219,9 +219,17 @@ async fn e2e_swap_race_never_returns_the_secret() {
     let fx = fixture_or_skip!();
     let e = ctx(&fx);
     let c = &e.ctx;
+    // Plus a decoy symlink named like the kernel's text for an unlinked descriptor ("race (deleted)"), pointing at an
+    // in-root file: a check on the realpath-resolved name alone would be vouched for by a name the attacker chose.
     let attacker = r#"
 import os
 d = "/srv/app/data"
+with open(d + "/race-decoy", "w") as f:
+    f.write("decoy content for the swap race\n")
+try:
+    os.symlink(d + "/race-decoy", d + "/race (deleted)")
+except FileExistsError:
+    pass
 while True:
     for kind in ("decoy", "symlink", "hardlink"):
         tmp = d + "/.race-tmp"
@@ -245,11 +253,23 @@ while True:
         &format!("{CONTAINER}:/tmp/race.py"),
     ]);
     assert!(cp.status.success(), "{cp:?}");
+    // Stops the attacker and restores the seeded state even if an assertion fails. `[r]ace` keeps pkill from
+    // matching the cleanup shell's own command line, which also contains the script name.
+    struct StopAttacker;
+    impl Drop for StopAttacker {
+        fn drop(&mut self) {
+            in_container(
+                "pkill -f '/tmp/[r]ace.py'; sleep 0.2; printf 'decoy content for the swap race\\n' > /srv/app/data/.race-tmp; \
+                 mv -f /srv/app/data/.race-tmp /srv/app/data/race; rm -f '/srv/app/data/race (deleted)' /srv/app/data/race-decoy",
+            );
+        }
+    }
+    let _stop = StopAttacker;
     let start = docker(&["exec", "-d", "-u", "sentinel", CONTAINER, "python3", "/tmp/race.py"]);
     assert!(start.status.success(), "{start:?}");
 
     let mut outcomes = (0usize, 0usize); // (succeeded, refused)
-    for _ in 0..40 {
+    for _ in 0..80 {
         if let Ok(r) = ssh_file_read(c, read("app", "data/race")).await {
             assert!(!r.data.content.contains(SECRET), "file_read leaked the secret");
             outcomes.0 += 1;
@@ -278,11 +298,8 @@ while True:
             outcomes.1 += 1;
         }
     }
-    in_container(
-        "pkill -f /tmp/race.py; printf 'decoy content for the swap race\\n' > /srv/app/data/.race-tmp; mv /srv/app/data/.race-tmp /srv/app/data/race",
-    );
     eprintln!("swap race: {} succeeded on the decoy, {} refused", outcomes.0, outcomes.1);
-    assert_eq!(outcomes.0 + outcomes.1, 120);
+    assert_eq!(outcomes.0 + outcomes.1, 240);
 }
 
 /// A remote command that outlives the read timeout is killed on the host, not just abandoned by the client.
@@ -329,7 +346,7 @@ async fn e2e_timed_out_command_leaves_no_remote_process() {
             break;
         }
     }
-    in_container("pkill -f 8099 || true");
+    in_container("pkill -f '[8]099' || true");
     assert!(
         leftover.trim().is_empty(),
         "remote curl survived the timeout: {leftover} (result {err:?})"
