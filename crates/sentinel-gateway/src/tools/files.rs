@@ -319,6 +319,8 @@ pub struct FileStatData {
     pub group: String,
     pub mtime: DateTime<Utc>,
     pub nlink: u32,
+    /// Owner and group names came from the host.
+    pub content_trust: &'static str,
 }
 
 pub async fn ssh_file_stat(ctx: &AppContext, p: FileStatParams) -> Result<ResultEnvelope<FileStatData>> {
@@ -354,6 +356,7 @@ pub async fn ssh_file_stat(ctx: &AppContext, p: FileStatParams) -> Result<Result
                 group: display_escape(group),
                 mtime: epoch(mtime),
                 nlink: nlink.parse().unwrap_or(0),
+                content_trust: UNTRUSTED,
             })
         },
     )

@@ -1559,6 +1559,10 @@ expression: v
         },
         "DiskUsageData": {
           "properties": {
+            "content_trust": {
+              "description": "Entry paths and the mount point came from the host.",
+              "type": "string"
+            },
             "entries": {
               "description": "Largest first, excluding the requested path itself.",
               "items": {
@@ -1591,7 +1595,8 @@ expression: v
             "filesystem",
             "total_bytes",
             "entries",
-            "entries_truncated"
+            "entries_truncated",
+            "content_trust"
           ],
           "type": "object"
         },
@@ -2780,6 +2785,10 @@ expression: v
               "minimum": 0,
               "type": "integer"
             },
+            "content_trust": {
+              "description": "Owner and group names came from the host.",
+              "type": "string"
+            },
             "group": {
               "type": "string"
             },
@@ -2810,7 +2819,8 @@ expression: v
             "owner",
             "group",
             "mtime",
-            "nlink"
+            "nlink",
+            "content_trust"
           ],
           "type": "object"
         },
@@ -3919,6 +3929,10 @@ expression: v
             "arch": {
               "type": "string"
             },
+            "content_trust": {
+              "description": "Every string above came from the host.",
+              "type": "string"
+            },
             "cpus": {
               "format": "uint32",
               "minimum": 0,
@@ -3974,7 +3988,8 @@ expression: v
             "load_15m",
             "mem_total_bytes",
             "mem_available_bytes",
-            "uptime_seconds"
+            "uptime_seconds",
+            "content_trust"
           ],
           "type": "object"
         },
@@ -6415,6 +6430,10 @@ expression: v
             "active_state": {
               "type": "string"
             },
+            "content_trust": {
+              "description": "The state strings came from the host.",
+              "type": "string"
+            },
             "load_state": {
               "type": "string"
             },
@@ -6453,7 +6472,8 @@ expression: v
             "load_state",
             "result",
             "main_pid",
-            "n_restarts"
+            "n_restarts",
+            "content_trust"
           ],
           "type": "object"
         },

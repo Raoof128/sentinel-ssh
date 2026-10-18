@@ -90,6 +90,8 @@ pub struct HostFacts {
     pub mem_available_bytes: u64,
     pub uptime_seconds: u64,
     pub os_pretty_name: Option<String>,
+    /// Every string above came from the host.
+    pub content_trust: &'static str,
 }
 
 fn command(mk: &Marker) -> RemoteCommand {
@@ -120,7 +122,7 @@ pub fn parse_host_facts(mk: &Marker, text: &str) -> Result<HostFacts> {
     }
     let uname: Vec<&str> = s[0].split_whitespace().collect();
     let (kernel, arch) = match uname.as_slice() {
-        [os, rel, arch, ..] => (format!("{os} {rel}"), (*arch).to_owned()),
+        [os, rel, arch, ..] => (display_escape(&format!("{os} {rel}")), display_escape(arch)),
         _ => return Err(parse_err("uname")),
     };
     let cpus = s[1].trim().parse().map_err(|_| parse_err("nproc"))?;
@@ -162,6 +164,7 @@ pub fn parse_host_facts(mk: &Marker, text: &str) -> Result<HostFacts> {
         mem_available_bytes,
         uptime_seconds,
         os_pretty_name,
+        content_trust: crate::tools::UNTRUSTED,
     })
 }
 

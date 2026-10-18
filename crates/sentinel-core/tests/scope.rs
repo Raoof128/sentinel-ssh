@@ -112,3 +112,32 @@ fn overlong_paths_and_components_are_rejected() {
     assert!(e.message.contains("4096"), "{}", e.message);
     resolve_scoped(&app(), &"a".repeat(255)).unwrap();
 }
+
+/// Red team L6: every Default_Ignorable_Code_Point renders visibly (Unicode 16 DerivedCoreProperties).
+#[test]
+fn default_ignorable_code_points_are_escaped() {
+    for c in [
+        '\u{034F}',
+        '\u{115F}',
+        '\u{1160}',
+        '\u{17B4}',
+        '\u{17B5}',
+        '\u{180B}',
+        '\u{180F}',
+        '\u{2065}',
+        '\u{3164}',
+        '\u{FE00}',
+        '\u{FE0F}',
+        '\u{FFA0}',
+        '\u{FFF0}',
+        '\u{FFF8}',
+        '\u{E0000}',
+        '\u{E0100}',
+        '\u{E01EF}',
+        '\u{E0FFF}',
+    ] {
+        let s = display_escape(&format!("a{c}b"));
+        assert_eq!(s, format!("a\\u{{{:X}}}b", c as u32), "U+{:04X}", c as u32);
+    }
+    assert_eq!(display_escape("é漢字🙂"), "é漢字🙂");
+}

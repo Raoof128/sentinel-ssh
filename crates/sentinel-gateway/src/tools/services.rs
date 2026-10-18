@@ -36,6 +36,8 @@ pub struct ServiceState {
     pub main_pid: u32,
     pub n_restarts: u32,
     pub active_enter_timestamp: Option<String>,
+    /// The state strings came from the host.
+    pub content_trust: &'static str,
 }
 
 /// `systemctl [--user] <verb> ...` for a registered unit.
@@ -84,7 +86,7 @@ pub async fn ssh_service_status(ctx: &AppContext, p: ServiceStatusParams) -> Res
             if m.is_empty() {
                 return Err(SentinelError::new(ErrorCode::RemoteFailure, "systemctl returned no properties"));
             }
-            let get = |k: &str| m.get(k).copied().unwrap_or("").to_owned();
+            let get = |k: &str| sentinel_core::scope::display_escape(m.get(k).copied().unwrap_or(""));
             Ok(ServiceState {
                 service_id: p.service_id,
                 unit: svc.unit,
@@ -96,6 +98,7 @@ pub async fn ssh_service_status(ctx: &AppContext, p: ServiceStatusParams) -> Res
                 main_pid: get("MainPID").parse().unwrap_or(0),
                 n_restarts: get("NRestarts").parse().unwrap_or(0),
                 active_enter_timestamp: Some(get("ActiveEnterTimestamp")).filter(|s| !s.is_empty()),
+                content_trust: crate::tools::UNTRUSTED,
             })
         },
     )

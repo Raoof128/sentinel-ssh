@@ -444,3 +444,78 @@ async fn spoofed_capability_messages_in_stderr_are_not_trusted() {
         assert_eq!(e.code, ErrorCode::CapabilityUnsupported, "{e:?}");
     }
 }
+
+/// Red team L1: every remote-sourced string is display-escaped and every result that carries one says so.
+#[test]
+fn host_facts_escape_every_remote_string() {
+    let mk = Marker::new();
+    let f = parse_host_facts(&mk, &facts_with(&mk, 0, "Linux 6.1\u{202E}x x86\u{200B}64")).unwrap();
+    assert_eq!(f.kernel, "Linux 6.1\\u{202E}x");
+    assert_eq!(f.arch, "x86\\u{200B}64");
+    assert_eq!(f.content_trust, "untrusted");
+}
+
+#[tokio::test]
+async fn service_disk_and_stat_results_are_escaped_and_marked_untrusted() {
+    let svc_out = b"Id=app-api.service\nActiveState=act\xe2\x80\xaeive\nSubState=run\x1bning\nLoadState=loaded\nResult=success\nMainPID=1\nNRestarts=0\nActiveEnterTimestamp=Sat\xe2\x80\x8b\n".to_vec();
+    let ctx = ctx_with(FakeBackend::new().on("systemctl show", svc_out));
+    let s = ssh_service_status(
+        &ctx,
+        ServiceStatusParams {
+            host_id: "h1".into(),
+            service_id: "api".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(s.data.active_state, "act\\u{202E}ive");
+    assert_eq!(s.data.sub_state, "run\\u{1B}ning");
+    assert_eq!(s.data.active_enter_timestamp.as_deref(), Some("Sat\\u{200B}"));
+    assert_eq!(s.data.content_trust, "untrusted");
+
+    let stat = ctx_with(FakeBackend::new().on("stat -c", b"regular file|3|644|u|g|1700000000|1\n".to_vec()));
+    let st = ssh_file_stat(
+        &stat,
+        FileStatParams {
+            host_id: "h1".into(),
+            root: "app".into(),
+            path: "x".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(st.data.content_trust, "untrusted");
+}
+
+/// Red team L7: a usage figure that skipped unreadable subtrees is an undercount, so the result says partial.
+#[tokio::test]
+async fn disk_usage_with_unreadable_subtrees_is_partial() {
+    use sentinel_core::envelope::Outcome;
+    let mk_df = "Filesystem 1-blocks Used Available Capacity Mounted on\n/dev/x 100 50 50 50% /srv\n";
+    let fake = FakeBackend::new().on_script(Script {
+        matches: "du ".into(),
+        stdout: format!("{mk_df}\n--SENTINEL--\n10\t.\x005\t./a\x00").into_bytes(),
+        stderr: b"du: cannot read directory './private': Permission denied\n".to_vec(),
+        exit: 1,
+        ..Default::default()
+    });
+    let e = ssh_disk_usage(
+        &ctx_with(fake),
+        DiskUsageParams {
+            host_id: "h1".into(),
+            root: "app".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(e.outcome, Outcome::Partial);
+    assert!(
+        e.warnings.iter().any(|w| w.contains("partial_permission_denied")),
+        "{:?}",
+        e.warnings
+    );
+    assert_eq!(e.data.content_trust, "untrusted");
+}

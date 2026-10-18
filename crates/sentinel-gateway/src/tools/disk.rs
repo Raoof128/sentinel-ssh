@@ -53,6 +53,8 @@ pub struct DiskUsageData {
     /// Largest first, excluding the requested path itself.
     pub entries: Vec<DiskEntry>,
     pub entries_truncated: bool,
+    /// Entry paths and the mount point came from the host.
+    pub content_trust: &'static str,
 }
 
 fn bad(what: &str) -> SentinelError {
@@ -74,7 +76,7 @@ pub fn parse_df(text: &str) -> Result<FilesystemUsage> {
         total_bytes: n(1)?,
         used_bytes: n(2)?,
         available_bytes: n(3)?,
-        mount: c[5..].join(" "),
+        mount: display_escape(&c[5..].join(" ")),
     })
 }
 
@@ -119,7 +121,9 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
                 );
             let out = run.run_pinned(Pin::Tree, &target, Effect::Read, cmd).await?;
             if String::from_utf8_lossy(&out.stderr).contains("Permission denied") {
+                // Unreadable subtrees were skipped: the totals are an undercount.
                 run.warn("partial_permission_denied");
+                run.mark_partial();
             }
             let text = run.text_lossy(&out.stdout);
             // Split once at the first marker: df's line comes first and is not remote-controlled; the rest is NUL records.
@@ -158,6 +162,7 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
                 total_bytes,
                 entries,
                 entries_truncated,
+                content_trust: crate::tools::UNTRUSTED,
             })
         },
     )
