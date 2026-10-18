@@ -103,6 +103,7 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
                 .then(
                     RemoteCommand::new("du")
                         .flag("-x")
+                        .flag("-P")
                         .flag("-B1")
                         .flag("-d")
                         .num(depth as u64)
@@ -111,14 +112,15 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
                         .pipe(RemoteCommand::new("sort").flag("-rn"))
                         .pipe(RemoteCommand::new("head").flag("-n").num(max_entries as u64 + 2)),
                 );
-            let out = run.run(&cmd).await?;
+            let out = run.run_guarded("directory", &target.absolute, cmd).await?;
             if String::from_utf8_lossy(&out.stderr).contains("Permission denied") {
                 run.warn("partial_permission_denied");
             }
             let text = run.text_lossy(&out.stdout);
             let s = sections(&text);
             let filesystem = parse_df(s.first().copied().unwrap_or(""))?;
-            let prefix = format!("{}/", root.path);
+            let root_prefix = format!("{}/", root.path);
+            let target_prefix = format!("{}/", target.absolute.trim_end_matches('/'));
             let mut total_bytes = 0;
             let mut entries = Vec::new();
             for line in s.get(1).copied().unwrap_or("").lines() {
@@ -128,7 +130,11 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
                     total_bytes = bytes;
                     continue;
                 }
-                let rel = path.strip_prefix(&prefix).unwrap_or(path);
+                // Only paths inside the requested directory; anything else is dropped, never shown raw.
+                if !path.starts_with(&target_prefix) {
+                    continue;
+                }
+                let Some(rel) = path.strip_prefix(&root_prefix) else { continue };
                 entries.push(DiskEntry {
                     path: display_escape(rel),
                     bytes,

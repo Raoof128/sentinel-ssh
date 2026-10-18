@@ -59,41 +59,58 @@ pub struct ProcessListData {
 const REDACTED: &str = "[REDACTED]";
 
 struct Redactors {
-    kv: Regex,
+    bearer: Regex,
+    header: Regex,
+    assign: Regex,
+    flag_space: Regex,
     url: Regex,
     key_like: Regex,
     mysql_p: Regex,
 }
 
+/// Credential-ish words, matched anywhere inside a flag or variable name (`DB_PASSWORD`, `--github-token`).
+const KW: &str = r"(?:password|passwd|pwd|pass|token|secret|credential|api[_-]?key|apikey|access[_-]?key|private[_-]?key|auth)";
+
 fn redactors() -> &'static Redactors {
     static R: OnceLock<Redactors> = OnceLock::new();
     R.get_or_init(|| Redactors {
-        kv: Regex::new(r"(?i)((?:^|\s)-{0,2}(?:password|passwd|pass|token|secret|client[_-]?secret|api[_-]?key|apikey|access[_-]?key|authorization|auth[_-]?token))(=|\s+)(\S+)").unwrap(),
+        bearer: Regex::new(r"(?i)\b(bearer|basic)(\s+)(\S+)").unwrap(),
+        header: Regex::new(r"(?i)\b((?:proxy-)?authorization|x-api-key|api-key)(:\s*)(\S+)").unwrap(),
+        assign: Regex::new(&format!(r"(?i)([^\s=:&?]*{KW}[^\s=:&?]*)(=)([^\s&]+)")).unwrap(),
+        flag_space: Regex::new(&format!(r"(?i)((?:^|\s)-{{1,2}}[\w.-]*{KW}[\w.-]*)(\s+)([^\s-]\S*)")).unwrap(),
         url: Regex::new(r"(://[^/\s:@]+:)[^@\s/]+@").unwrap(),
-        key_like: Regex::new(r"(?i)([\w-]*key)(=)(\S{8,})").unwrap(),
+        key_like: Regex::new(r"(?i)([\w-]*key[\w-]*)(=)(\S{8,})").unwrap(),
         mysql_p: Regex::new(r"(\s-p)(\S+)").unwrap(),
     })
 }
 
+fn keep_redacted(c: &regex::Captures) -> String {
+    if &c[3] == REDACTED {
+        c[0].to_owned()
+    } else {
+        format!("{}{}{REDACTED}", &c[1], &c[2])
+    }
+}
+
 /// Best-effort redaction of credentials in a command line. It cannot catch every secret (spec §9.7); the enforceable
-/// boundary is which processes and fields are returned, not this filter.
+/// boundary is which processes and fields are returned, not this filter. Errs towards over-redaction.
 pub fn redact_args(args: &str) -> String {
     let r = redactors();
-    let mut s = r.kv.replace_all(args, format!("${{1}}${{2}}{REDACTED}")).into_owned();
-    s = r.url.replace_all(&s, format!("${{1}}{REDACTED}@")).into_owned();
-    s = r
-        .key_like
-        .replace_all(&s, |c: &regex::Captures| {
-            if &c[3] == REDACTED {
-                c[0].to_owned()
-            } else {
-                format!("{}{}{REDACTED}", &c[1], &c[2])
-            }
-        })
-        .into_owned();
-    let program = s.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("");
+    let mut s = args.to_owned();
+    let program = s
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_owned();
     if program.starts_with("mysql") || program.starts_with("mariadb") {
         s = r.mysql_p.replace_all(&s, format!("${{1}}{REDACTED}")).into_owned();
+    }
+    s = r.url.replace_all(&s, format!("${{1}}{REDACTED}@")).into_owned();
+    for re in [&r.bearer, &r.header, &r.assign, &r.flag_space, &r.key_like] {
+        s = re.replace_all(&s, keep_redacted).into_owned();
     }
     s
 }

@@ -403,3 +403,47 @@ async fn exit_255_from_ssh_is_classified() {
         ErrorCode::HostKeyChanged
     );
 }
+
+/// Security review 2026-10-18: keywords embedded in env-var or flag names were not redacted.
+#[test]
+fn redaction_catches_embedded_keywords() {
+    assert_eq!(redact_args("env DB_PASSWORD=hunter2 app"), "env DB_PASSWORD=[REDACTED] app");
+    assert_eq!(redact_args("app --db-password hunter2"), "app --db-password [REDACTED]");
+    assert_eq!(redact_args("app MYSQL_PWD=x1"), "app MYSQL_PWD=[REDACTED]");
+    assert_eq!(
+        redact_args("curl http://h/x?token=abc&secret=def"),
+        "curl http://h/x?token=[REDACTED]&secret=[REDACTED]"
+    );
+    assert_eq!(
+        redact_args("curl -H Authorization: Bearer abc.def"),
+        "curl -H Authorization: [REDACTED] [REDACTED]"
+    );
+    assert_eq!(
+        redact_args("app --aws-access-key-id=AKIA123 --github-token=ghp_x"),
+        "app --aws-access-key-id=[REDACTED] --github-token=[REDACTED]"
+    );
+    assert_eq!(redact_args("app --credentials-file=/run/c"), "app --credentials-file=[REDACTED]");
+    assert_eq!(redact_args("nginx -g daemon off;"), "nginx -g daemon off;");
+}
+
+/// Security review 2026-10-18: disk_usage must refuse a symlinked target and drop du lines outside the root.
+#[tokio::test]
+async fn disk_usage_refuses_symlink_target() {
+    let fake = FakeBackend::new().on_script(exit_script("df -B1", b"SENTINEL_KIND_MISMATCH\n", 97));
+    let ctx = ctx_with(fake.clone());
+    let e = ssh_disk_usage(&ctx, du("h1", "app", Some("escape"))).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::PolicyDenied);
+    assert!(e.message.contains("not a directory"), "{}", e.message);
+    assert!(fake.calls()[0].contains("in \"directory\")"), "{}", fake.calls()[0]);
+    assert!(fake.calls()[0].contains("du -x -P"), "{}", fake.calls()[0]);
+}
+
+#[tokio::test]
+async fn disk_usage_drops_paths_outside_root() {
+    let out = b"/dev/vda1 100 50 50 50% /\n\n--SENTINEL--\n9000\t/srv/app\n5000\t/etc/shadow\n4000\t/srv/app/data\n/srv/application\t1\n"
+        .to_vec();
+    let fake = FakeBackend::new().on("df -B1", out);
+    let e = ssh_disk_usage(&ctx_with(fake), du("h1", "app", None)).await.unwrap();
+    assert_eq!(e.data.entries.iter().map(|x| x.path.as_str()).collect::<Vec<_>>(), ["data"]);
+    assert!(!serde_json::to_string(&e).unwrap().contains("shadow"));
+}
