@@ -1069,6 +1069,13 @@ Describe this gateway's backend, limits, protocol versions and guarantees, inclu
           "minimum": 0,
           "type": "integer"
         },
+        "max_pending_per_host": {
+          "default": 32,
+          "description": "Waiters for one host at most, so a single slow host cannot fill the whole pending queue.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "max_result_bytes": {
           "default": 65536,
           "format": "uint",
@@ -1634,6 +1641,10 @@ Report filesystem capacity and directory usage inside a registered root, with de
     },
     "DiskUsageData": {
       "properties": {
+        "content_trust": {
+          "description": "Entry paths and the mount point came from the host.",
+          "type": "string"
+        },
         "entries": {
           "description": "Largest first, excluding the requested path itself.",
           "items": {
@@ -1666,7 +1677,8 @@ Report filesystem capacity and directory usage inside a registered root, with de
         "filesystem",
         "total_bytes",
         "entries",
-        "entries_truncated"
+        "entries_truncated",
+        "content_trust"
       ],
       "type": "object"
     },
@@ -2897,6 +2909,10 @@ Return type, size, mode, owner, group and mtime of a path inside a root without 
           "minimum": 0,
           "type": "integer"
         },
+        "content_trust": {
+          "description": "Owner and group names came from the host.",
+          "type": "string"
+        },
         "group": {
           "type": "string"
         },
@@ -2927,7 +2943,8 @@ Return type, size, mode, owner, group and mtime of a path inside a root without 
         "owner",
         "group",
         "mtime",
-        "nlink"
+        "nlink",
+        "content_trust"
       ],
       "type": "object"
     },
@@ -4078,6 +4095,10 @@ Collect an allowlisted host-facts schema: kernel, architecture, CPUs, load, memo
         "arch": {
           "type": "string"
         },
+        "content_trust": {
+          "description": "Every string above came from the host.",
+          "type": "string"
+        },
         "cpus": {
           "format": "uint32",
           "minimum": 0,
@@ -4133,7 +4154,8 @@ Collect an allowlisted host-facts schema: kernel, architecture, CPUs, load, memo
         "load_15m",
         "mem_total_bytes",
         "mem_available_bytes",
-        "uptime_seconds"
+        "uptime_seconds",
+        "content_trust"
       ],
       "type": "object"
     },
@@ -5997,7 +6019,7 @@ Read the state of one of your operations, including whether remote termination w
 
 ## ssh_process_list
 
-List process summaries (pid, user, CPU, memory, elapsed, command) with command-line secrets redacted; at most 200.
+List process summaries (pid, user, CPU, memory, elapsed, command) with command-line secrets redacted on a best-effort basis (a filter, never a guarantee); at most 200.
 
 <details><summary>Input schema</summary>
 
@@ -6658,6 +6680,10 @@ Inspect the systemd state of a registered service id. No arbitrary unit names or
         "active_state": {
           "type": "string"
         },
+        "content_trust": {
+          "description": "The state strings came from the host.",
+          "type": "string"
+        },
         "load_state": {
           "type": "string"
         },
@@ -6696,7 +6722,8 @@ Inspect the systemd state of a registered service id. No arbitrary unit names or
         "load_state",
         "result",
         "main_pid",
-        "n_restarts"
+        "n_restarts",
+        "content_trust"
       ],
       "type": "object"
     },

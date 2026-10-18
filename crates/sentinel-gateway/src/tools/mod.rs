@@ -52,7 +52,7 @@ pub const TOOL_NAMES: [&str; 17] = [
 /// The observer-mode guarantee, stated verbatim in capabilities, server instructions and README (spec §5.1, §5.5).
 pub const GUARANTEE_STATEMENT: &str =
     "The gateway enforces the tool interface. The SSH account may permit more; it is not a remote sandbox.";
-pub const SYMLINK_CONTAINMENT: &str = "paths are resolved on the host with realpath and must stay inside the registered root; a final symlink is refused; a concurrent rename on the host between check and use is not prevented in observer mode";
+pub const SYMLINK_CONTAINMENT: &str = "paths are resolved on the host with realpath and must stay inside the registered root; a directory is entered and a file opened once on a descriptor before anything is read, so a rename or symlink swap between check and read cannot redirect it; final symlinks, special files and hard-linked files are refused";
 
 tokio::task_local! {
     /// The caller's cancellation: the MCP request's token, or the enclosing batch's operation token.
