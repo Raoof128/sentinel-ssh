@@ -14,7 +14,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 struct Server {
     _dirs: TestDirs,
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     lines: Lines<BufReader<ChildStdout>>,
     next_id: u64,
 }
@@ -36,7 +36,7 @@ fn spawn_server() -> Server {
     Server {
         _dirs: dirs,
         child,
-        stdin,
+        stdin: Some(stdin),
         lines,
         next_id: 1,
     }
@@ -46,8 +46,9 @@ impl Server {
     async fn send(&mut self, v: Value) {
         let mut line = serde_json::to_vec(&v).unwrap();
         line.push(b'\n');
-        self.stdin.write_all(&line).await.unwrap();
-        self.stdin.flush().await.unwrap();
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        stdin.write_all(&line).await.unwrap();
+        stdin.flush().await.unwrap();
     }
 
     async fn rpc(&mut self, method: &str, params: Value) -> Value {
@@ -94,6 +95,17 @@ impl Server {
     }
 }
 
+impl Server {
+    /// Closes stdin and waits: the server must exit by itself (and so flush coverage profiles) when the client leaves.
+    async fn shutdown(mut self) -> std::process::ExitStatus {
+        drop(self.stdin.take());
+        tokio::time::timeout(Duration::from_secs(10), self.child.wait())
+            .await
+            .expect("server exits after stdin closes")
+            .unwrap()
+    }
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.start_kill();
@@ -125,6 +137,7 @@ async fn modern_discover_and_catalogue() {
     }
     let r = s.rpc_modern("tools/call", json!({"name": "ssh_hosts_list", "arguments": {}})).await;
     assert_eq!(r["result"]["structuredContent"]["data"]["hosts"][0]["host_id"], "h1", "{r}");
+    assert!(s.shutdown().await.success(), "server exits cleanly on EOF");
 }
 
 /// A client that still sends `initialize` with 2026-07-28 is answered with the newest version that has an initialize
@@ -136,6 +149,7 @@ async fn initialize_with_modern_version_falls_back_to_legacy_lifecycle() {
     assert_eq!(init["result"]["protocolVersion"], "2025-11-25", "{init}");
     assert_eq!(init["result"]["serverInfo"]["name"], "sentinel-ssh");
     assert!(init["result"]["instructions"].as_str().unwrap().contains("not a remote sandbox"));
+    assert!(s.shutdown().await.success(), "server exits cleanly on EOF");
 }
 
 #[tokio::test]
@@ -149,6 +163,7 @@ async fn legacy_initialize_negotiates_2025_11_25() {
         r["result"]["content"][0]["text"].as_str().unwrap().contains("\"schema_version\""),
         "text fallback present: {r}"
     );
+    assert!(s.shutdown().await.success(), "server exits cleanly on EOF");
 }
 
 #[tokio::test]
@@ -170,6 +185,7 @@ async fn unknown_tool_and_bad_args_are_errors_not_crashes() {
     );
     let r = s.call("ssh_hosts_list", json!({})).await;
     assert_eq!(r["result"]["structuredContent"]["data"]["hosts"][0]["host_id"], "h1", "{r}");
+    assert!(s.shutdown().await.success(), "server exits cleanly on EOF");
 }
 
 #[tokio::test]
@@ -186,6 +202,7 @@ async fn policy_denial_surfaces_typed_error() {
     assert_eq!(sc["retry"]["strategy"], "never");
     assert!(sc["data"].is_null());
     assert!(sc["operation_id"].as_str().unwrap().starts_with("op_"));
+    assert!(s.shutdown().await.success(), "server exits cleanly on EOF");
 }
 
 #[tokio::test]
@@ -202,6 +219,7 @@ async fn output_schemas_are_typed() {
         .clone();
     let text = hosts["outputSchema"].to_string();
     assert!(text.contains("\"hosts\""), "output schema names the data fields: {text}");
+    assert!(s.shutdown().await.success(), "server exits cleanly on EOF");
 }
 
 #[test]
