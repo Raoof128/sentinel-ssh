@@ -5,6 +5,7 @@ use sentinel_core::effect::Effect;
 use sentinel_core::envelope::ResultEnvelope;
 use sentinel_core::error::{ErrorCode, Result, SentinelError};
 use sentinel_core::policy::{HostPolicy, ResourceRef};
+use sentinel_core::scope::display_escape;
 use serde::{Deserialize, Serialize};
 
 use crate::mcp::results::Detail;
@@ -147,10 +148,10 @@ pub fn parse_host_facts(text: &str) -> Result<HostFacts> {
     let os_pretty_name = s.get(6).and_then(|os| {
         os.lines()
             .find_map(|l| l.strip_prefix("PRETTY_NAME="))
-            .map(|v| v.trim_matches('"').to_owned())
+            .map(|v| display_escape(v.trim_matches('"')))
     });
     Ok(HostFacts {
-        hostname: s[5].trim().to_owned(),
+        hostname: display_escape(s[5].trim()),
         kernel,
         arch,
         cpus,

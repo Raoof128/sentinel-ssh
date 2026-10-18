@@ -93,3 +93,10 @@ fn display_escapes_all_format_and_separator_chars() {
         assert_eq!(shown, format!("a\\u{{{:X}}}b", c as u32), "U+{:04X} not escaped", c as u32);
     }
 }
+
+/// Hardening: a literal backslash is escaped too, so a real file named `a\u{202E}b` cannot display like an escaped U+202E.
+#[test]
+fn display_escape_is_unambiguous() {
+    assert_eq!(display_escape("a\\b"), "a\\\\b");
+    assert_ne!(display_escape("a\\u{202E}b"), display_escape("a\u{202e}b"));
+}

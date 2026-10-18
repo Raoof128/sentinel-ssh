@@ -127,8 +127,18 @@ impl FromStr for HostKey {
         if !KEY_TYPES.contains(key_type) {
             return Err(invalid(format!("{form}; unsupported key type '{key_type}'")));
         }
-        if base64::engine::general_purpose::STANDARD.decode(b64).is_err() {
+        let Ok(blob) = base64::engine::general_purpose::STANDARD.decode(b64) else {
             return Err(invalid(format!("{form}; key body is not valid base64")));
+        };
+        // An SSH public key blob starts with its own algorithm name (RFC 4253 §6.6): a length, then the name.
+        let embedded = blob
+            .get(..4)
+            .map(|l| u32::from_be_bytes([l[0], l[1], l[2], l[3]]) as usize)
+            .and_then(|n| blob.get(4..4 + n));
+        if embedded != Some(key_type.as_bytes()) {
+            return Err(invalid(format!(
+                "{form}; the key body's algorithm does not match the declared type '{key_type}'"
+            )));
         }
         Ok(HostKey {
             key_type: (*key_type).to_owned(),

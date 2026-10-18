@@ -125,6 +125,9 @@ pub async fn ssh_logs_search(ctx: &AppContext, p: LogsSearchParams) -> Result<Re
             if has_io_error(&out.stderr) {
                 return Err(not_found_or_failure(&out.stderr));
             }
+            if String::from_utf8_lossy(&out.stderr).contains("binary file matches") {
+                run.warn("binary_content_skipped");
+            }
             let text = run.text_lossy(&out.stdout);
             let mut matches = Vec::new();
             for line in text.lines() {

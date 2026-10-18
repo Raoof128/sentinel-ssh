@@ -106,13 +106,15 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
                         .flag("-P")
                         // Without -a, `du -d N` lists directories only and files never appear.
                         .flag("-a")
+                        // NUL-terminated records: a newline in a file name cannot forge an entry.
+                        .flag("-0")
                         .flag("-B1")
                         .flag("-d")
                         .num(depth as u64)
                         .flag("--")
                         .arg(&target.absolute)
-                        .pipe(RemoteCommand::new("sort").flag("-rn"))
-                        .pipe(RemoteCommand::new("head").flag("-n").num(max_entries as u64 + 2)),
+                        .pipe(RemoteCommand::new("sort").flag("-z").flag("-rn"))
+                        .pipe(RemoteCommand::new("head").flag("-z").flag("-n").num(max_entries as u64 + 2)),
                 );
             let out = run.run_guarded(Some("directory"), &target, cmd).await?;
             if String::from_utf8_lossy(&out.stderr).contains("Permission denied") {
@@ -125,7 +127,7 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
             let target_prefix = format!("{}/", target.absolute.trim_end_matches('/'));
             let mut total_bytes = 0;
             let mut entries = Vec::new();
-            for line in s.get(1).copied().unwrap_or("").lines() {
+            for line in s.get(1).copied().unwrap_or("").split('\0').filter(|r| !r.is_empty()) {
                 let Some((bytes, path)) = line.split_once('\t') else { continue };
                 let Ok(bytes) = bytes.trim().parse::<u64>() else { continue };
                 if path == target.absolute {

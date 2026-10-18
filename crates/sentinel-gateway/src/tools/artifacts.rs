@@ -2,13 +2,13 @@
 
 use schemars::JsonSchema;
 use sentinel_core::envelope::ResultEnvelope;
-use sentinel_core::error::Result;
+use sentinel_core::error::{ErrorCode, Result, SentinelError};
 use sentinel_core::identity::ArtifactId;
 use serde::{Deserialize, Serialize};
 
 use crate::artifacts::ArtifactRecord;
 use crate::mcp::results::Detail;
-use crate::tools::files::{DEFAULT_PAGE_BYTES, Encoding, encode_page};
+use crate::tools::files::{DEFAULT_PAGE_BYTES, Encoding, MAX_OFFSET, encode_page};
 use crate::tools::pipeline::local_tool;
 use crate::tools::{AppContext, UNTRUSTED, bounded};
 
@@ -37,6 +37,9 @@ pub struct ArtifactReadData {
 }
 
 pub async fn ssh_artifact_read(ctx: &AppContext, p: ArtifactReadParams) -> Result<ResultEnvelope<ArtifactReadData>> {
+    if p.offset.is_some_and(|o| o > MAX_OFFSET) {
+        return Err(SentinelError::new(ErrorCode::InvalidInput, "offset must be at most 2^63-1").with_detail("field", "offset"));
+    }
     let id = ArtifactId::parse(&p.artifact_id)?;
     let length = bounded(p.length, DEFAULT_PAGE_BYTES, 65536, "length")?;
     local_tool(ctx, "ssh_artifact_read", || async move {

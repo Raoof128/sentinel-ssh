@@ -1,12 +1,10 @@
 //! `sentinel-ssh doctor` (spec §15.1): checks configuration, trust inputs and the local SSH client without any remote mutation.
 
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use crate::config::{AuthConfig, Config, MAX_CONTROL_PATH, check_private_file, ensure_private_dir, load_config};
 
-pub const SYSTEM_SSH_CONFIG: &str = "/etc/ssh/ssh_config";
 const MIN_OPENSSH: (u32, u32) = (8, 9);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,10 +41,6 @@ impl DoctorReport {
 }
 
 pub fn run_doctor(config_path: &Path, connect: bool) -> DoctorReport {
-    run_doctor_with_system_config(config_path, connect, Path::new(SYSTEM_SSH_CONFIG))
-}
-
-pub fn run_doctor_with_system_config(config_path: &Path, connect: bool, system_ssh_config: &Path) -> DoctorReport {
     let mut r = DoctorReport::default();
     match check_private_file(config_path, "config file") {
         Ok(()) => r.push("config.permissions", true, "owner-only (0600) and owned by the current user"),
@@ -59,12 +53,10 @@ pub fn run_doctor_with_system_config(config_path: &Path, connect: bool, system_s
         }
         Err(e) => {
             r.push("config.load", false, e.message);
-            check_system_config(&mut r, system_ssh_config);
             return r;
         }
     };
     check_ssh_binary(&mut r, &cfg.gateway.ssh_binary);
-    check_system_config(&mut r, system_ssh_config);
     check_private_dir(&mut r, "dirs.artifact", &cfg.gateway.artifact_dir);
     check_private_dir(&mut r, "dirs.runtime", &cfg.gateway.runtime_dir);
     for h in &cfg.hosts {
@@ -135,90 +127,4 @@ fn check_private_dir(r: &mut DoctorReport, name: &str, dir: &Path) {
         Ok(()) => r.push(name, true, format!("{} (0700, owned by the current user)", dir.display())),
         Err(e) => r.push(name, false, e.message),
     }
-}
-
-/// `ssh -F /dev/null` skips the user config but OpenSSH still reads the system file and its `Include`s.
-/// The gateway trusts them as administrator-owned; this check verifies that assumption and flags executable directives.
-fn check_system_config(r: &mut DoctorReport, path: &Path) {
-    let mut problems = Vec::new();
-    let mut warnings = Vec::new();
-    let mut files = vec![path.to_path_buf()];
-    let mut i = 0;
-    while i < files.len() && i < 64 {
-        let f = files[i].clone();
-        i += 1;
-        let Ok(meta) = std::fs::metadata(&f) else { continue };
-        if meta.uid() != 0 {
-            problems.push(format!("{} is not owned by root", f.display()));
-        }
-        if meta.permissions().mode() & 0o022 != 0 {
-            problems.push(format!("{} is group- or world-writable", f.display()));
-        }
-        let Ok(text) = std::fs::read_to_string(&f) else { continue };
-        for (n, line) in text.lines().enumerate() {
-            let t = line.trim();
-            if t.starts_with('#') || t.is_empty() {
-                continue;
-            }
-            let lower = t.to_ascii_lowercase();
-            let mut words = lower.split(|c: char| c.is_whitespace() || c == '=').filter(|w| !w.is_empty());
-            let kw = words.next().unwrap_or("");
-            let arg = words.next().unwrap_or("");
-            let flag = match kw {
-                "proxycommand" if arg != "none" => Some("ProxyCommand"),
-                "localcommand" => Some("LocalCommand"),
-                "permitlocalcommand" if arg == "yes" => Some("PermitLocalCommand yes"),
-                "match" if lower.contains("exec") => Some("Match exec"),
-                "proxyjump" if arg != "none" => Some("ProxyJump"),
-                _ => None,
-            };
-            if let Some(what) = flag {
-                warnings.push(format!("{}:{} {what}", f.display(), n + 1));
-            }
-            if kw == "include" {
-                for pat in t.split_whitespace().skip(1) {
-                    let p = if pat.starts_with('/') {
-                        PathBuf::from(pat)
-                    } else {
-                        Path::new("/etc/ssh").join(pat)
-                    };
-                    if !p.starts_with("/etc/ssh/") {
-                        warnings.push(format!("{}:{} Include outside /etc/ssh: {pat}", f.display(), n + 1));
-                    }
-                    files.extend(expand_simple_glob(&p));
-                }
-            }
-        }
-    }
-    let ok = problems.is_empty();
-    let mut detail = Vec::new();
-    if ok {
-        detail.push(format!("{} and includes are administrator-owned", path.display()));
-    }
-    detail.extend(problems);
-    if !warnings.is_empty() {
-        detail.push(format!(
-            "executable or routing directives (explicit -o options override them for the same keyword): {}",
-            warnings.join("; ")
-        ));
-    }
-    r.push("ssh.system_config", ok, detail.join("; "));
-}
-
-/// Supports the `dir/*` and `dir/*.conf` patterns OpenSSH distributions use; other patterns are taken literally.
-fn expand_simple_glob(p: &Path) -> Vec<PathBuf> {
-    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    let Some(suffix) = name.strip_prefix('*') else {
-        return vec![p.to_path_buf()];
-    };
-    let Some(dir) = p.parent() else { return vec![] };
-    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|f| f.is_file() && f.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(suffix)))
-        .collect();
-    out.sort();
-    out
 }

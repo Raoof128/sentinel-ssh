@@ -83,7 +83,7 @@ async fn disk_usage_rejects_malformed_df_and_warns_on_unreadable_subdirs() {
     assert!(e.message.contains("df columns"), "{}", e.message);
     let denied = FakeBackend::new().on_script(script(
         "df -B1",
-        b"/dev/x 100 50 50 50% /\n\n--SENTINEL--\n8\t/srv/app\n",
+        b"/dev/x 100 50 50 50% /\n\n--SENTINEL--\n8\t/srv/app\x00",
         b"du: cannot read directory '/srv/app/private': Permission denied\n",
         0,
     ));

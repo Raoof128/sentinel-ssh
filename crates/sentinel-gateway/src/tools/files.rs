@@ -216,6 +216,9 @@ pub struct FileReadData {
 /// Default page size: a full page, base64-encoded with the envelope around it, fits the 8 KiB concise result.
 pub const DEFAULT_PAGE_BYTES: u32 = 4096;
 
+/// Largest accepted byte offset: `offset + 1` and `tail -c +N` must not overflow.
+pub const MAX_OFFSET: u64 = i64::MAX as u64;
+
 /// Encodes one page. File bodies are never lossily converted: invalid UTF-8 is an error that names the alternative.
 /// A page that ends inside a multi-byte character (and is not the end of the file) is trimmed to the last complete
 /// character; the caller reports the smaller byte count so the next page starts there. Returns `(content, bytes used)`.
@@ -235,6 +238,9 @@ pub(crate) fn encode_page(bytes: &[u8], enc: Encoding, at_eof: bool) -> Result<(
 }
 
 pub async fn ssh_file_read(ctx: &AppContext, p: FileReadParams) -> Result<ResultEnvelope<FileReadData>> {
+    if p.offset.is_some_and(|o| o > MAX_OFFSET) {
+        return Err(SentinelError::new(ErrorCode::InvalidInput, "offset must be at most 2^63-1").with_detail("field", "offset"));
+    }
     let length = bounded(p.length, DEFAULT_PAGE_BYTES, 65536, "length")?;
     let root = p.root.clone();
     read_tool(

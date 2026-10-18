@@ -1,9 +1,9 @@
 //! `sentinel-ssh doctor`: every check reports a clear failure, and none of them touches a remote host except `--connect`.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use sentinel_gateway::doctor::{DoctorReport, run_doctor, run_doctor_with_system_config};
+use sentinel_gateway::doctor::{DoctorReport, run_doctor};
 use sentinel_testkit::configs::{TEST_HOST_KEY, TestDirs, fake_identity, fake_ssh_script, minimal_config_toml, write_private};
 
 struct Fx {
@@ -34,13 +34,6 @@ fn check<'a>(r: &'a DoctorReport, name: &str) -> &'a sentinel_gateway::doctor::D
         .iter()
         .find(|c| c.name == name)
         .unwrap_or_else(|| panic!("no check {name}: {}", r.render()))
-}
-
-fn sys_config(dir: &Path, text: &str, mode: u32) -> PathBuf {
-    let p = dir.join("ssh_config");
-    write_private(&p, text);
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
-    p
 }
 
 #[test]
@@ -87,33 +80,6 @@ fn open_private_directories_fail() {
     let r = run_doctor(&f.config(|t| t), false);
     let c = check(&r, "dirs.artifact");
     assert!(!c.ok && c.detail.contains("0700"), "{c:?}");
-}
-
-#[test]
-fn system_config_problems_and_risky_directives_are_reported() {
-    let f = fx();
-    let extra = f.dirs.state.path().join("extra.conf");
-    write_private(&extra, "PermitLocalCommand yes\n");
-    let text = format!(
-        "# comment\n\nInclude conf.d/*.conf\nInclude {}\nHost *\n  LocalCommand echo hi\n  ProxyJump bastion\n  Match exec \"true\"\n  ProxyCommand none\n",
-        extra.display()
-    );
-    let sys = sys_config(f.dirs.state.path(), &text, 0o666);
-    let r = run_doctor_with_system_config(&f.config(|t| t), false, &sys);
-    let c = check(&r, "ssh.system_config");
-    assert!(!c.ok, "{c:?}");
-    for needle in [
-        "not owned by root",
-        "group- or world-writable",
-        "Include outside /etc/ssh",
-        "LocalCommand",
-        "ProxyJump",
-        "Match exec",
-        "PermitLocalCommand yes",
-    ] {
-        assert!(c.detail.contains(needle), "missing {needle:?} in {}", c.detail);
-    }
-    assert!(!c.detail.contains("ProxyCommand"), "ProxyCommand none is safe: {}", c.detail);
 }
 
 #[test]

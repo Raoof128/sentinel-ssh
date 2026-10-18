@@ -105,7 +105,10 @@ fn needs_escape(c: char) -> bool {
 pub fn display_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        if needs_escape(c) {
+        if c == '\\' {
+            // Escaped too, so a literal "\u{202E}" in a name never looks like an escaped U+202E.
+            out.push_str("\\\\");
+        } else if needs_escape(c) {
             out.push_str(&format!("\\u{{{:X}}}", c as u32));
         } else {
             out.push(c);

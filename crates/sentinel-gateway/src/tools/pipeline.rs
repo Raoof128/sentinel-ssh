@@ -114,10 +114,16 @@ pub fn classify_remote(cmd: &RemoteCommand, out: &RunOutcome) -> Result<()> {
                 .with_detail("utility", c[1].to_string()),
         );
     }
-    if stderr.contains("has not been booted with systemd") || stderr.contains("Failed to connect to bus") {
+    if stderr.contains("has not been booted with systemd") {
         return Err(SentinelError::new(
             ErrorCode::CapabilityUnsupported,
             "remote host is not running systemd (systemctl unavailable)",
+        ));
+    }
+    if stderr.contains("Failed to connect to bus") {
+        return Err(SentinelError::new(
+            ErrorCode::CapabilityUnsupported,
+            "systemd is not reachable for this account (no system manager, or no user session for user-scope units)",
         ));
     }
     if let Some(c) = unsupported_option_re().captures(&stderr) {
@@ -240,10 +246,19 @@ where
         max_stderr_bytes: 16 * 1024,
     };
     let result = async {
-        let _permit = if effect == Effect::Export {
-            ctx.scheduler.acquire_transfer(&host_id).await?
-        } else {
-            ctx.scheduler.acquire_read(&host_id).await?
+        let acquire = async {
+            if effect == Effect::Export {
+                ctx.scheduler.acquire_transfer(&host_id).await
+            } else {
+                ctx.scheduler.acquire_read(&host_id).await
+            }
+        };
+        // A cancel while waiting for a slot ends the operation before anything is dispatched.
+        let _permit = tokio::select! {
+            p = acquire => p?,
+            _ = op.cancel.cancelled() => {
+                return Err(SentinelError::new(ErrorCode::Timeout, "cancelled while queued").with_detail("cancelled", true));
+            }
         };
         ctx.operations.mark_running(&op.id);
         let extras = Arc::new(Mutex::new(Extras::default()));

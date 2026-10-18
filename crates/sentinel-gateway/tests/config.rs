@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use sentinel_core::error::ErrorCode;
 use sentinel_core::identity::HostId;
 use sentinel_gateway::config::{Config, HostKey, load_config};
-use sentinel_gateway::doctor::{run_doctor, run_doctor_with_system_config};
+use sentinel_gateway::doctor::run_doctor;
 use sentinel_testkit::configs::{TEST_HOST_KEY, TestDirs, fake_identity, host_block, minimal_config_toml, write_private};
 
 struct Fx {
@@ -148,18 +148,7 @@ fn doctor_reports_without_connecting() {
     let r = run_doctor(&f.path_of(&f.minimal()), false);
     assert!(r.checks.iter().any(|c| c.name == "config.permissions" && c.ok), "{r:?}");
     assert!(r.checks.iter().any(|c| c.name == "ssh.binary"), "{r:?}");
-    assert!(r.checks.iter().any(|c| c.name == "ssh.system_config"), "{r:?}");
     assert!(r.checks.iter().any(|c| c.name == "host.h1.identity" && c.ok), "{r:?}");
-}
-
-#[test]
-fn doctor_flags_proxycommand_in_system_config() {
-    let f = fx();
-    let sys = f.dirs.state.path().join("ssh_config");
-    write_private(&sys, "Host *\n  ProxyCommand nc %h %p\n");
-    let r = run_doctor_with_system_config(&f.path_of(&f.minimal()), false, &sys);
-    let c = r.checks.iter().find(|c| c.name == "ssh.system_config").unwrap();
-    assert!(c.detail.contains("ProxyCommand"), "{c:?}");
 }
 
 #[test]
