@@ -20,6 +20,8 @@ pub struct Script {
     pub stderr: Vec<u8>,
     pub exit: i32,
     pub delay: Duration,
+    /// Fail at the transport level with this code instead of producing output.
+    pub error: Option<ErrorCode>,
 }
 
 #[derive(Debug, Default)]
@@ -77,11 +79,16 @@ impl FakeBackend {
         if let Some(code) = g.fail {
             return Err(SentinelError::new(code, "fake: connection failure"));
         }
-        g.scripts
+        let script = g
+            .scripts
             .iter()
             .find(|s| rendered.contains(&s.matches))
             .cloned()
-            .ok_or_else(|| SentinelError::new(ErrorCode::RemoteFailure, format!("fake: no script for {rendered}")))
+            .ok_or_else(|| SentinelError::new(ErrorCode::RemoteFailure, format!("fake: no script for {rendered}")))?;
+        match script.error {
+            Some(code) => Err(SentinelError::new(code, "fake: scripted transport failure")),
+            None => Ok(script),
+        }
     }
 
     async fn wait(delay: Duration, limit: Duration, cancel: &CancellationToken) -> Result<()> {

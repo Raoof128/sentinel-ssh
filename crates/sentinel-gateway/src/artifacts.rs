@@ -1,7 +1,7 @@
 //! Principal-scoped local artefact store (spec §6.4, §7.3, §10.7). File bytes and oversized results live here, never in
 //! model context. Each artefact is `<id>.bin` plus `<id>.json` metadata, both mode 0600, in a 0700 directory.
 
-use std::io::{ErrorKind, SeekFrom, Write};
+use std::io::{SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -55,12 +55,9 @@ pub struct ArtifactStore {
 }
 
 fn io_err(what: &str, e: std::io::Error) -> SentinelError {
-    let code = if e.kind() == ErrorKind::StorageFull {
-        ErrorCode::DiskFull
-    } else {
-        ErrorCode::Internal
-    };
-    SentinelError::new(code, format!("artefact store: {what}: {e}"))
+    let mut err = SentinelError::from(e);
+    err.message = format!("artefact store: {what}: {}", err.message);
+    err
 }
 
 fn not_found() -> SentinelError {
@@ -76,9 +73,20 @@ fn create_private(path: &Path) -> Result<std::fs::File> {
         .map_err(|e| io_err("create", e))
 }
 
+/// Where an [`ArtifactWriter`] puts bytes: a file in production, an injected failing sink in fault tests.
+pub(crate) trait Sink: AsyncWrite + Unpin + Send {
+    fn sync(&mut self) -> Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send + '_>>;
+}
+
+impl Sink for tokio::fs::File {
+    fn sync(&mut self) -> Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send + '_>> {
+        Box::pin(self.sync_all())
+    }
+}
+
 /// Streams bytes into `<id>.part`, hashing as it goes. Nothing is visible to readers until [`ArtifactWriter::finish`].
 pub struct ArtifactWriter {
-    file: tokio::fs::File,
+    file: Box<dyn Sink>,
     hasher: Sha256,
     bytes: u64,
     part: PathBuf,
@@ -87,22 +95,23 @@ pub struct ArtifactWriter {
 }
 
 impl ArtifactWriter {
-    /// Verifies the digest (when given), then publishes the artefact. On mismatch the partial bytes are deleted.
+    /// Verifies the digest (when given), then publishes the artefact. Any failure (flush, sync, digest, publish) deletes
+    /// the partial bytes, so a failed transfer never leaves a readable or orphaned artefact behind.
     pub async fn finish(mut self, expected_sha256: Option<&str>) -> Result<ArtifactRecord> {
-        let flushed = async {
-            self.file.flush().await?;
-            self.file.sync_all().await
-        }
-        .await;
-        if let Err(e) = flushed {
+        let result = self.verify_and_publish(expected_sha256).await;
+        if result.is_err() {
             let _ = tokio::fs::remove_file(&self.part).await;
-            return Err(io_err("flush", e));
         }
+        result
+    }
+
+    async fn verify_and_publish(&mut self, expected_sha256: Option<&str>) -> Result<ArtifactRecord> {
+        self.file.flush().await.map_err(|e| io_err("flush", e))?;
+        self.file.sync().await.map_err(|e| io_err("sync", e))?;
         let digest = hex::encode(self.hasher.finalize_reset());
         if let Some(exp) = expected_sha256
             && !exp.eq_ignore_ascii_case(&digest)
         {
-            let _ = tokio::fs::remove_file(&self.part).await;
             return Err(
                 SentinelError::new(ErrorCode::DigestMismatch, "received bytes do not match the expected SHA-256")
                     .with_detail("expected_sha256", exp.to_ascii_lowercase())
@@ -113,10 +122,7 @@ impl ArtifactWriter {
         let mut rec = self.record.clone();
         rec.bytes = self.bytes;
         rec.sha256 = digest;
-        if let Err(e) = self.store.publish(&self.part, &rec) {
-            let _ = tokio::fs::remove_file(&self.part).await;
-            return Err(e);
-        }
+        self.store.publish(&self.part, &rec)?;
         Ok(rec)
     }
 
@@ -176,7 +182,7 @@ impl ArtifactStore {
     pub fn begin_write(&self, owner: &PrincipalId, origin: ArtifactOrigin, kind: ContentKind) -> Result<ArtifactWriter> {
         let id = ArtifactId::generate();
         let part = self.dir.join(format!("{id}.part"));
-        let file = tokio::fs::File::from_std(create_private(&part)?);
+        let file: Box<dyn Sink> = Box::new(tokio::fs::File::from_std(create_private(&part)?));
         let now = Utc::now();
         let expires_at = now + chrono::Duration::from_std(self.retention).unwrap_or(chrono::Duration::hours(24));
         let record = ArtifactRecord {
@@ -211,7 +217,10 @@ impl ArtifactStore {
     }
 
     pub async fn put_bytes(&self, owner: &PrincipalId, origin: ArtifactOrigin, kind: ContentKind, bytes: &[u8]) -> Result<ArtifactRecord> {
-        let mut w = self.begin_write(owner, origin, kind)?;
+        Self::fill(self.begin_write(owner, origin, kind)?, bytes).await
+    }
+
+    async fn fill(mut w: ArtifactWriter, bytes: &[u8]) -> Result<ArtifactRecord> {
         if let Err(e) = w.write_all(bytes).await {
             w.abort().await;
             return Err(io_err("write", e));
@@ -276,5 +285,82 @@ impl ArtifactStore {
             }
         }
         Ok(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, ErrorKind};
+
+    use tokio::io::AsyncWriteExt;
+
+    use super::*;
+
+    /// Fails on the chosen operation, the way a full or failing disk would.
+    struct FailingSink {
+        fail_write: bool,
+    }
+
+    impl AsyncWrite for FailingSink {
+        fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+            Poll::Ready(if self.fail_write {
+                Err(io::Error::from(ErrorKind::StorageFull))
+            } else {
+                Ok(buf.len())
+            })
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl Sink for FailingSink {
+        fn sync(&mut self) -> Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + '_>> {
+            Box::pin(async { Err(io::Error::other("sync failed")) })
+        }
+    }
+
+    fn store() -> (tempfile::TempDir, ArtifactStore) {
+        let d = tempfile::tempdir().unwrap();
+        let s = ArtifactStore::open(&d.path().join("a"), Duration::from_secs(60)).unwrap();
+        (d, s)
+    }
+
+    fn writer(s: &ArtifactStore, fail_write: bool) -> ArtifactWriter {
+        let owner = PrincipalId::parse("me").unwrap();
+        let mut w = s
+            .begin_write(
+                &owner,
+                ArtifactOrigin::ToolResult {
+                    operation_id: OperationId::generate(),
+                },
+                ContentKind::Binary,
+            )
+            .unwrap();
+        w.file = Box::new(FailingSink { fail_write });
+        w
+    }
+
+    #[tokio::test]
+    async fn a_failed_write_is_disk_full_and_leaves_nothing() {
+        let (_d, s) = store();
+        let e = ArtifactStore::fill(writer(&s, true), b"data").await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::DiskFull);
+        assert_eq!(std::fs::read_dir(s.dir()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_failed_sync_is_reported_and_leaves_nothing() {
+        let (_d, s) = store();
+        let mut w = writer(&s, false);
+        w.write_all(b"data").await.unwrap();
+        w.shutdown().await.unwrap();
+        let e = w.finish(None).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Internal);
+        assert!(e.message.contains("sync"), "{}", e.message);
+        assert_eq!(std::fs::read_dir(s.dir()).unwrap().count(), 0);
     }
 }

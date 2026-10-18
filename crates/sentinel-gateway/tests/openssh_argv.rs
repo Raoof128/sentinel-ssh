@@ -388,3 +388,66 @@ fn agent_auth_disables_default_identity_files() {
     );
     b.check_effective_config(&h).unwrap();
 }
+
+fn raw_script(dirs: &TestDirs, body: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let p = dirs.state.path().join("raw-ssh");
+    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).unwrap();
+    p
+}
+
+/// If the client cannot even report its configuration, nothing is dispatched.
+#[tokio::test]
+async fn failing_ssh_g_refuses_dispatch() {
+    let (dirs, mut cfg) = setup();
+    cfg.gateway.ssh_binary = raw_script(&dirs, "echo 'bad option' >&2; exit 2");
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let e = b
+        .run(&host(&cfg), &RemoteCommand::new("true"), &budget(2000), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::ConfigInvalid);
+    assert!(e.message.contains("ssh -G failed"), "{}", e.message);
+}
+
+/// A client whose effective configuration weakens trust (e.g. a hostile system config) is refused, with every reason listed.
+#[tokio::test]
+async fn unsafe_effective_config_refuses_dispatch() {
+    let (dirs, mut cfg) = setup();
+    let g = "stricthostkeychecking false\nuserknownhostsfile /tmp/elsewhere\nglobalknownhostsfile /dev/null\nforwardagent no\nclearallforwardings yes\npermitlocalcommand no\nbatchmode yes\nproxycommand nc %h %p\nidentityfile /a\nidentityfile /b\nidentitiesonly yes\n";
+    cfg.gateway.ssh_binary = raw_script(
+        &dirs,
+        &format!("case \" $* \" in *\" -G \"*) printf '%s' '{g}'; exit 0;; esac; exit 0"),
+    );
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let e = b
+        .run(&host(&cfg), &RemoteCommand::new("true"), &budget(2000), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::ConfigInvalid);
+    for needle in [
+        "stricthostkeychecking=false (expected true)",
+        "userknownhostsfile=/tmp/elsewhere",
+        "proxycommand=nc %h %p",
+        "identityfile=/a,/b",
+    ] {
+        assert!(e.message.contains(needle), "missing {needle:?} in {}", e.message);
+    }
+    let mut agent = host(&cfg);
+    agent.auth = sentinel_gateway::config::AuthConfig::Agent;
+    let e = b.check_effective_config(&agent).unwrap_err();
+    assert!(e.message.contains("agent auth must not offer on-disk keys"), "{}", e.message);
+}
+
+#[tokio::test]
+async fn a_client_killed_by_a_signal_reports_the_signal() {
+    let (dirs, mut cfg) = setup();
+    with_script(&dirs, &mut cfg, "kill -TERM $$");
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let r = b
+        .run(&host(&cfg), &RemoteCommand::new("true"), &budget(5000), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(r.exit, ExitKind::Signal(15));
+}

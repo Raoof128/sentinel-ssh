@@ -228,3 +228,73 @@ async fn inline_only_bound_refuses_instead_of_spilling() {
     );
     assert_eq!(std::fs::read_dir(store.dir()).unwrap().count(), 0);
 }
+
+#[tokio::test]
+async fn a_failed_publish_leaves_no_partial_bytes() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_d, store) = fresh();
+    let mut w = store.begin_write(&me().id, origin(), ContentKind::Binary).unwrap();
+    w.write_all(b"abc").await.unwrap();
+    w.shutdown().await.unwrap();
+    std::fs::set_permissions(store.dir(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let r = w.finish(None).await;
+    std::fs::set_permissions(store.dir(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(r.unwrap_err().code, ErrorCode::Internal);
+    assert!(
+        std::fs::read_dir(store.dir())
+            .unwrap()
+            .all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".bin"))
+    );
+}
+
+#[tokio::test]
+async fn sweep_skips_files_it_cannot_parse() {
+    let d = tempfile::tempdir().unwrap();
+    let store = ArtifactStore::open(&d.path().join("art"), Duration::ZERO).unwrap();
+    std::fs::write(store.dir().join("junk.json"), b"not json").unwrap();
+    std::fs::write(store.dir().join("note.txt"), b"x").unwrap();
+    assert_eq!(store.sweep_expired().unwrap(), 0);
+    assert!(store.dir().join("junk.json").exists());
+}
+
+/// Escaping can make a preview larger than its byte budget; the bound shrinks it until the whole envelope fits.
+#[tokio::test]
+async fn heavily_escaped_previews_still_fit_the_limit() {
+    let (_d, store) = fresh();
+    let env = ResultEnvelope::succeeded(OperationId::generate(), None, serde_json::json!({ "q": "\"\\".repeat(6000) }));
+    let b = bound_envelope(&store, &me().id, env, Detail::Concise, &Budgets::default())
+        .await
+        .unwrap();
+    assert!(b.truncated);
+    assert!(serde_json::to_vec(&b).unwrap().len() <= 8192);
+}
+
+/// When the data itself is small but the envelope is large (many warnings), the preview is the whole data.
+#[tokio::test]
+async fn small_data_in_a_large_envelope_previews_whole() {
+    let (_d, store) = fresh();
+    let mut env = ResultEnvelope::succeeded(OperationId::generate(), None, serde_json::json!({ "a": 1 }));
+    env.warnings = (0..600).map(|i| format!("warning-number-{i}")).collect();
+    let b = bound_envelope(&store, &me().id, env, Detail::Concise, &Budgets::default())
+        .await
+        .unwrap();
+    assert!(
+        serde_json::to_vec(&b).unwrap().len() <= 8192,
+        "the size bound holds whatever the warnings"
+    );
+    assert!(
+        b.warnings.len() <= 17 && b.warnings.iter().any(|w| w == "warnings_truncated"),
+        "{:?}",
+        b.warnings.len()
+    );
+    assert_eq!(b.data.unwrap()["a"], 1, "once the warnings are capped the small data fits inline");
+}
+
+#[test]
+fn inline_bound_accepts_small_results_at_either_detail() {
+    for d in [Detail::Concise, Detail::Full] {
+        let env = ResultEnvelope::succeeded(OperationId::generate(), None, serde_json::json!({ "a": 1 }));
+        let b = sentinel_gateway::mcp::results::bound_envelope_inline(env, d, &Budgets::default()).unwrap();
+        assert_eq!(b.data.unwrap()["a"], 1);
+    }
+}

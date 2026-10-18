@@ -98,6 +98,16 @@ Linux with GNU coreutils, findutils, procps and grep, plus `curl` for HTTP healt
 
 ## Development
 
+The quality gate runs every check below and fails on the first problem:
+
+```bash
+bash scripts/check.sh
+```
+
+It runs fmt, clippy with warnings as errors, a `forbid(unsafe_code)` check, a secret scan of tracked files, a scan of remote flag literals, and tool-contract freshness. It then starts the Docker sshd fixture and runs every test under `cargo llvm-cov`, requiring every product source line to execute at least once. `--quick` skips Docker and coverage; `--large` adds the 256 MiB download. Coverage needs `cargo install cargo-llvm-cov --locked` and `rustup component add llvm-tools-preview`.
+
+For a fast loop without Docker:
+
 ```bash
 cargo test --workspace
 ```

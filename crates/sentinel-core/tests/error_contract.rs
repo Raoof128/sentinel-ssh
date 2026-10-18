@@ -40,3 +40,12 @@ fn details_round_trip() {
 fn error_schema_snapshot() {
     insta::assert_json_snapshot!(schemars::schema_for!(SentinelError));
 }
+
+#[test]
+fn io_errors_map_to_typed_codes() {
+    let full: SentinelError = std::io::Error::from(std::io::ErrorKind::StorageFull).into();
+    assert_eq!(full.code, ErrorCode::DiskFull);
+    let other: SentinelError = std::io::Error::other("boom").into();
+    assert_eq!(other.code, ErrorCode::Internal);
+    assert!(other.message.contains("boom"));
+}

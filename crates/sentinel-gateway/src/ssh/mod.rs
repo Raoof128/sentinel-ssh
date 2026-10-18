@@ -15,10 +15,10 @@ use openssh::OpenSshBackend;
 
 /// `doctor --connect`: runs `true` on each host. Returns `(check name, ok, detail)` per host. No remote mutation.
 pub fn doctor_connect(cfg: &Config) -> Vec<(String, bool, String)> {
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(rt) => rt,
-        Err(e) => return vec![("connect".into(), false, format!("cannot start runtime: {e}"))],
-    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a current-thread runtime always builds");
     let backend = match OpenSshBackend::new(&cfg.gateway) {
         Ok(b) => b,
         Err(e) => return vec![("connect".into(), false, e.message)],

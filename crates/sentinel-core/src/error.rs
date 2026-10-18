@@ -103,3 +103,15 @@ impl SentinelError {
 }
 
 pub type Result<T> = std::result::Result<T, SentinelError>;
+
+/// Local I/O failures: a full disk is `DISK_FULL` (spec §7.3.3); anything else is `INTERNAL`.
+impl From<std::io::Error> for SentinelError {
+    fn from(e: std::io::Error) -> Self {
+        let code = if e.kind() == std::io::ErrorKind::StorageFull {
+            ErrorCode::DiskFull
+        } else {
+            ErrorCode::Internal
+        };
+        SentinelError::new(code, e.to_string())
+    }
+}

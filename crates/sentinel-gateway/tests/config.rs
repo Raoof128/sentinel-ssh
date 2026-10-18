@@ -254,8 +254,11 @@ fn runtime_dir_too_long_for_a_control_socket_is_rejected() {
 #[test]
 fn service_active_health_check_is_accepted() {
     let f = fx();
-    let toml = f.minimal() + "\n[hosts.health_checks.api_active]\nkind = \"service_active\"\nservice = \"api\"\n";
-    assert!(f.load(&toml).is_ok());
+    let c = f.load(&f.minimal()).unwrap();
+    assert!(matches!(
+        c.hosts[0].health_checks.get("api_active"),
+        Some(sentinel_gateway::config::HealthCheckConfig::ServiceActive { service }) if service == "api"
+    ));
 }
 
 #[test]

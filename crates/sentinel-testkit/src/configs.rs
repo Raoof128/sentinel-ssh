@@ -84,6 +84,10 @@ export = false
 unit = "app-api.service"
 scope = "system"
 
+[hosts.services.worker]
+unit = "worker.service"
+scope = "user"
+
 [hosts.log_sources.api]
 path = "/var/log/app/api.log"
 
@@ -92,6 +96,10 @@ kind = "http"
 url = "http://127.0.0.1:8080/health"
 expect_status = 200
 timeout_secs = 5
+
+[hosts.health_checks.api_active]
+kind = "service_active"
+service = "api"
 "#,
         identity = identity.display(),
     )

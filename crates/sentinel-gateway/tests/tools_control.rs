@@ -139,6 +139,7 @@ async fn operation_get_and_cancel_running_op() {
         stderr: vec![],
         exit: 0,
         delay: Duration::from_secs(5),
+        error: None,
     });
     let ctx = ctx_with(fake);
     let c2 = ctx.ctx.clone();

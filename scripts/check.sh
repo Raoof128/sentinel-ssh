@@ -76,10 +76,20 @@ IGNORED=""
 cargo llvm-cov --version >/dev/null 2>&1 || fail "cargo-llvm-cov is required: cargo install cargo-llvm-cov --locked; rustup component add llvm-tools-preview"
 cargo llvm-cov clean --workspace >/dev/null 2>&1 || true
 # shellcheck disable=SC2086
-cargo llvm-cov --workspace \
-  --ignore-filename-regex 'sentinel-testkit/' \
-  --show-missing-lines \
-  --fail-under-lines 100 \
-  -- $IGNORED || fail "tests failed or line coverage is below 100% (uncovered lines are listed above)"
+cargo llvm-cov --workspace --ignore-filename-regex 'sentinel-testkit/' --lcov --output-path target/lcov.info -- $IGNORED \
+  || fail "tests failed"
+
+# Line coverage = every product source line executed at least once, merged across generic instantiations (lcov DA).
+# llvm-cov's summary also counts lines of never-run monomorphised copies of a generic function as missed even when the
+# same source line ran in another copy; that per-copy figure is reported below for transparency but is not the gate.
+awk '
+  /^SF:/ { file = substr($0, 4) }
+  /^DA:/ { split(substr($0, 4), a, ","); key = file ":" a[1]; if (!(key in hit)) hit[key] = 0; if (a[2] + 0 > 0) hit[key] = 1 }
+  END {
+    for (k in hit) { total++; if (!hit[k]) { missed++; print "  uncovered: " k } }
+    printf "product lines executed: %d/%d\n", total - missed, total
+    exit (missed > 0)
+  }' target/lcov.info || fail "line coverage is below 100% (uncovered lines listed above)"
+cargo llvm-cov report --ignore-filename-regex 'sentinel-testkit/' --summary-only 2>/dev/null | awk '/^TOTAL/ { print "llvm-cov summary (per instantiation): regions " $4 ", functions " $7 ", lines " $10 }'
 
 printf '\nOK: every gate passed (fmt, clippy, unsafe, secrets, docs, e2e fixture, tests, 100%% line coverage).\n'

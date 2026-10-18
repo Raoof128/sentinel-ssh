@@ -49,6 +49,7 @@ fn exit_script(matches: &str, stderr: &[u8], exit: i32) -> Script {
         stderr: stderr.to_vec(),
         exit,
         delay: Duration::ZERO,
+        error: None,
     }
 }
 
@@ -302,6 +303,7 @@ async fn disk_usage_missing_du_in_pipeline_is_unsupported() {
         stderr: b"sh: 1: du: not found\n".to_vec(),
         exit: 0,
         delay: Duration::ZERO,
+        error: None,
     });
     let e = ssh_disk_usage(&ctx_with(fake), du("h1", "app", None)).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::CapabilityUnsupported);
@@ -346,6 +348,7 @@ async fn health_check_failure_is_a_result_not_an_error() {
         stderr: b"curl: (7) Failed to connect\n".to_vec(),
         exit: 7,
         delay: Duration::ZERO,
+        error: None,
     });
     let e = ssh_health_check(
         &ctx_with(fake),
@@ -491,6 +494,7 @@ async fn busybox_missing_utility_in_pipeline_is_unsupported() {
         stderr: b"sh: ps: not found\n".to_vec(),
         exit: 0,
         delay: Duration::ZERO,
+        error: None,
     });
     let e = ssh_process_list(&ctx_with(fake), ps("h1")).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::CapabilityUnsupported);

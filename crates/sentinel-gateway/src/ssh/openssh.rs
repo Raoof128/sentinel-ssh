@@ -366,7 +366,7 @@ impl SshBackend for OpenSshBackend {
         };
         match waited {
             Ok(status) => {
-                let status = status.map_err(|e| SentinelError::new(ErrorCode::Internal, format!("waiting for ssh: {e}")))?;
+                let status = status?;
                 drain(vec![t1, t2]).await;
                 let (stdout, stdout_truncated) = take(&out);
                 let (stderr, stderr_truncated) = take(&err);

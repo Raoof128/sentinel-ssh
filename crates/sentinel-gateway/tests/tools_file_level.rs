@@ -59,6 +59,7 @@ fn script(matches: &str, stdout: &[u8], stderr: &[u8], exit: i32) -> Script {
         stderr: stderr.to_vec(),
         exit,
         delay: Duration::ZERO,
+        error: None,
     }
 }
 

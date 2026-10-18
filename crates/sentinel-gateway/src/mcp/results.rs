@@ -99,11 +99,18 @@ fn split<T>(env: ResultEnvelope<T>) -> (ResultEnvelope<()>, T) {
     )
 }
 
-fn cut(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
+/// Warnings are short fixed codes; more than this many means something is looping, and they must not break the bound.
+pub const MAX_WARNINGS: usize = 16;
+
+fn cap_warnings(w: &mut Vec<String>) {
+    if w.len() > MAX_WARNINGS {
+        w.truncate(MAX_WARNINGS);
+        w.push("warnings_truncated".into());
     }
-    let mut i = max;
+}
+
+fn cut(s: &str, max: usize) -> &str {
+    let mut i = max.min(s.len());
     while !s.is_char_boundary(i) {
         i -= 1;
     }
@@ -121,6 +128,8 @@ pub async fn bound_envelope<T: Serialize>(
         Detail::Concise => b.default_result_bytes,
         Detail::Full => b.max_result_bytes,
     };
+    let mut env = env;
+    cap_warnings(&mut env.warnings);
     let full = serde_json::to_vec(&env).map_err(|e| SentinelError::new(ErrorCode::Internal, format!("serialising result: {e}")))?;
     let (head, data) = split(env);
     if full.len() <= limit {
