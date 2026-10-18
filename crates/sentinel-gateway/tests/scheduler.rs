@@ -185,3 +185,20 @@ async fn saturated_host_waiters_do_not_starve_other_hosts() {
     let other = tokio::time::timeout(Duration::from_millis(500), s.acquire_read(&h("idle"))).await;
     assert!(other.is_ok(), "a request for an idle host was blocked by a waiter on a busy host");
 }
+
+/// Final review #9: bulk transfers use their own per-host pool of 1 and never starve reads (spec §11.3).
+#[tokio::test]
+async fn transfers_have_their_own_pool() {
+    let s = Scheduler::new(&Budgets::default());
+    let host = h("h1");
+    let _t = s.acquire_transfer(&host).await.unwrap();
+    let second = tokio::time::timeout(Duration::from_millis(200), s.acquire_transfer(&host)).await;
+    assert!(second.is_err(), "second transfer to the same host must wait");
+    let reads: Vec<_> = futures::future::join_all((0..4).map(|_| s.acquire_read(&host)))
+        .await
+        .into_iter()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(reads.len(), 4, "reads are not blocked by a transfer");
+    assert!(s.acquire_transfer(&h("h2")).await.is_ok());
+}

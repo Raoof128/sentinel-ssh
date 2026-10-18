@@ -84,7 +84,7 @@ Read a byte range (<=64 KiB) of an artefact you own, such as a download or a tru
       "description": "utf8 (default) or base64."
     },
     "length": {
-      "description": "1-65536 bytes, default 8192.",
+      "description": "1-65536 bytes, default 4096.",
       "format": "uint32",
       "minimum": 0,
       "type": [
@@ -2395,7 +2395,7 @@ Read a byte range (<=64 KiB) of a regular file inside a readable root, as UTF-8 
       "type": "string"
     },
     "length": {
-      "description": "1-65536 bytes, default 8192.",
+      "description": "1-65536 bytes, default 4096.",
       "format": "uint32",
       "minimum": 0,
       "type": [

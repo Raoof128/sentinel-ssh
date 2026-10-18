@@ -57,7 +57,7 @@ expression: v
           "description": "utf8 (default) or base64."
         },
         "length": {
-          "description": "1-65536 bytes, default 8192.",
+          "description": "1-65536 bytes, default 4096.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -2298,7 +2298,7 @@ expression: v
           "type": "string"
         },
         "length": {
-          "description": "1-65536 bytes, default 8192.",
+          "description": "1-65536 bytes, default 4096.",
           "format": "uint32",
           "minimum": 0,
           "type": [

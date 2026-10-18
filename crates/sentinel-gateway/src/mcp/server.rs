@@ -18,7 +18,7 @@ use sentinel_core::error::{ErrorCode, Result, SentinelError};
 use sentinel_core::identity::OperationId;
 use serde::Serialize;
 
-use crate::mcp::results::{BoundedEnvelope, Detail, bound_envelope, failed_envelope};
+use crate::mcp::results::{BoundedEnvelope, Detail, bound_envelope, bound_envelope_inline, failed_envelope};
 use crate::tools::{
     AppContext, GUARANTEE_STATEMENT, artifacts, batch, capabilities, disk, files, health, hosts, logs, operations, processes, services,
     transfers,
@@ -60,18 +60,21 @@ impl SentinelServer {
         }
     }
 
+    /// `spill = false` (artefact reads) refuses an oversized page instead of storing it as a new artefact.
     async fn finish<T: Serialize>(
         &self,
         r: Result<ResultEnvelope<T>>,
         detail: Detail,
+        spill: bool,
     ) -> std::result::Result<BoundedEnvelope<T>, ToolError> {
-        match r {
-            Ok(env) => {
-                let b = &self.ctx.config.gateway.budgets;
-                bound_envelope(&self.ctx.artifacts, &self.ctx.principal.id, env, detail, b)
-                    .await
-                    .map_err(ToolError)
-            }
+        let b = &self.ctx.config.gateway.budgets;
+        let bounded = match r {
+            Ok(env) if spill => bound_envelope(&self.ctx.artifacts, &self.ctx.principal.id, env, detail, b).await,
+            Ok(env) => bound_envelope_inline(env, detail, b),
+            Err(e) => Err(e),
+        };
+        match bounded {
+            Ok(env) => Ok(env),
             Err(e) if e.code == ErrorCode::InvalidInput => Err(ToolError(e)),
             Err(e) => {
                 let id = e
@@ -87,6 +90,9 @@ impl SentinelServer {
 
 macro_rules! sentinel_tool {
     ($ty:ident, $name:literal, $desc:literal, $params:ty, $data:ty, $func:path) => {
+        sentinel_tool!($ty, $name, $desc, $params, $data, $func, spill = true);
+    };
+    ($ty:ident, $name:literal, $desc:literal, $params:ty, $data:ty, $func:path, spill = $spill:expr) => {
         pub struct $ty;
 
         impl ToolBase for $ty {
@@ -106,7 +112,7 @@ macro_rules! sentinel_tool {
         impl AsyncTool<SentinelServer> for $ty {
             async fn invoke(s: &SentinelServer, p: Self::Parameter) -> std::result::Result<Self::Output, Self::Error> {
                 let detail = p.detail.unwrap_or_default();
-                s.finish($func(&s.ctx, p).await, detail).await
+                s.finish($func(&s.ctx, p).await, detail, $spill).await
             }
         }
     };
@@ -230,7 +236,8 @@ sentinel_tool!(
     "Read a byte range (<=64 KiB) of an artefact you own, such as a download or a truncated result.",
     artifacts::ArtifactReadParams,
     artifacts::ArtifactReadData,
-    artifacts::ssh_artifact_read
+    artifacts::ssh_artifact_read,
+    spill = false
 );
 sentinel_tool!(
     CapabilitiesGetTool,

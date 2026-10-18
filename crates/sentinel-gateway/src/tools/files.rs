@@ -159,6 +159,12 @@ pub async fn ssh_files_list(ctx: &AppContext, p: FilesListParams) -> Result<Resu
                 return Err(not_found_or_failure(&out.stderr));
             }
             let mut all = parse_find(&run, &out.stdout);
+            if out.stdout_truncated {
+                // The last record may be cut mid-name; never report it. The listing is incomplete, so say so.
+                all.pop();
+                run.mark_partial();
+                run.warn("listing_truncated");
+            }
             all.sort_by(|a, b| a.0.cmp(&b.0));
             let after: Vec<_> = all
                 .into_iter()
@@ -189,7 +195,7 @@ pub struct FileReadParams {
     pub path: String,
     /// Byte offset, default 0.
     pub offset: Option<u64>,
-    /// 1-65536 bytes, default 8192.
+    /// 1-65536 bytes, default 4096.
     pub length: Option<u32>,
     /// utf8 (default; fails on invalid UTF-8) or base64.
     pub encoding: Option<Encoding>,
@@ -207,17 +213,29 @@ pub struct FileReadData {
     pub content_trust: &'static str,
 }
 
-/// File bodies are never lossily converted: invalid UTF-8 is an error that names the alternative (Review Focus 2).
-pub(crate) fn encode(bytes: &[u8], enc: Encoding) -> Result<String> {
+/// Default page size: a full page, base64-encoded with the envelope around it, fits the 8 KiB concise result.
+pub const DEFAULT_PAGE_BYTES: u32 = 4096;
+
+/// Encodes one page. File bodies are never lossily converted: invalid UTF-8 is an error that names the alternative.
+/// A page that ends inside a multi-byte character (and is not the end of the file) is trimmed to the last complete
+/// character; the caller reports the smaller byte count so the next page starts there. Returns `(content, bytes used)`.
+pub(crate) fn encode_page(bytes: &[u8], enc: Encoding, at_eof: bool) -> Result<(String, usize)> {
+    let not_utf8 = || SentinelError::new(ErrorCode::NotUtf8, "content is not UTF-8; request encoding=base64");
     match enc {
-        Encoding::Base64 => Ok(base64::engine::general_purpose::STANDARD.encode(bytes)),
-        Encoding::Utf8 => String::from_utf8(bytes.to_vec())
-            .map_err(|_| SentinelError::new(ErrorCode::NotUtf8, "content is not UTF-8; request encoding=base64")),
+        Encoding::Base64 => Ok((base64::engine::general_purpose::STANDARD.encode(bytes), bytes.len())),
+        Encoding::Utf8 => match std::str::from_utf8(bytes) {
+            Ok(t) => Ok((t.to_owned(), bytes.len())),
+            Err(e) if e.error_len().is_none() && !at_eof && e.valid_up_to() > 0 => {
+                let used = e.valid_up_to();
+                Ok((std::str::from_utf8(&bytes[..used]).expect("valid prefix").to_owned(), used))
+            }
+            Err(_) => Err(not_utf8()),
+        },
     }
 }
 
 pub async fn ssh_file_read(ctx: &AppContext, p: FileReadParams) -> Result<ResultEnvelope<FileReadData>> {
-    let length = bounded(p.length, 8192, 65536, "length")?;
+    let length = bounded(p.length, DEFAULT_PAGE_BYTES, 65536, "length")?;
     let root = p.root.clone();
     read_tool(
         ctx,
@@ -249,13 +267,15 @@ pub async fn ssh_file_read(ctx: &AppContext, p: FileReadParams) -> Result<Result
             let (size, body) = split_header(&out.stdout)?;
             let total_bytes = parse_size(&size)?;
             let encoding = p.encoding.unwrap_or_default();
+            let at_eof = offset + body.len() as u64 >= total_bytes;
+            let (content, used) = encode_page(body, encoding, at_eof)?;
             Ok(FileReadData {
                 offset,
-                bytes_returned: body.len() as u32,
+                bytes_returned: used as u32,
                 total_bytes,
-                eof: offset + body.len() as u64 >= total_bytes,
+                eof: offset + used as u64 >= total_bytes,
                 encoding,
-                content: encode(body, encoding)?,
+                content,
                 content_trust: UNTRUSTED,
             })
         },

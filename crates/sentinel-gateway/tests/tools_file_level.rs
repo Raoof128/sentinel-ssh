@@ -455,3 +455,58 @@ async fn failure_messages_do_not_echo_remote_paths() {
     assert!(!e.message.contains("/srv/app"), "{}", e.message);
     assert!(!serde_json::to_string(&e).unwrap().contains("/srv/app"));
 }
+
+/// Final review #5: a default page must fit the default 8 KiB result inline, even as base64.
+#[tokio::test]
+async fn default_read_page_fits_the_default_result() {
+    let fake = FakeBackend::new().on("tail -c", b"9999\n--SENTINEL--\nx".to_vec());
+    let ctx = ctx_with(fake.clone());
+    ssh_file_read(&ctx, read("h1", "app", "x", None, None, None)).await.unwrap();
+    assert!(fake.calls()[0].contains("head -c 4096"), "{}", fake.calls()[0]);
+}
+
+/// Final review #6: a page that ends inside a multi-byte character is trimmed, not rejected.
+#[tokio::test]
+async fn utf8_page_boundary_is_trimmed_not_rejected() {
+    let fake = FakeBackend::new().on("tail -c", b"3\n--SENTINEL--\na\xc3".to_vec());
+    let e = ssh_file_read(&ctx_with(fake), read("h1", "app", "x", Some(0), Some(2), None))
+        .await
+        .unwrap();
+    assert_eq!(e.data.content, "a");
+    assert_eq!(e.data.bytes_returned, 1);
+    assert!(!e.data.eof);
+    // At end of file an incomplete sequence is genuinely invalid.
+    let fake = FakeBackend::new().on("tail -c", b"2\n--SENTINEL--\na\xc3".to_vec());
+    assert_eq!(
+        ssh_file_read(&ctx_with(fake), read("h1", "app", "x", Some(0), Some(2), None))
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotUtf8
+    );
+}
+
+/// Final review #10: a listing cut by the output cap is Partial, and no cut-off name is reported as an entry.
+#[tokio::test]
+async fn truncated_listing_is_partial_without_fabricated_names() {
+    let mut out = Vec::new();
+    for i in 0..12_000 {
+        out.extend_from_slice(format!("f\t1\t1\t644\tfile-{i:05}-{}\0", "n".repeat(30)).as_bytes());
+    }
+    let fake = FakeBackend::new().on("find", out);
+    let e = ssh_files_list(
+        &ctx_with(fake),
+        FilesListParams {
+            max_entries: Some(500),
+            ..list("h1", "app", "")
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(e.outcome, sentinel_core::envelope::Outcome::Partial);
+    assert!(e.warnings.iter().any(|w| w == "listing_truncated"), "{:?}", e.warnings);
+    assert!(
+        e.data.entries.iter().all(|x| x.name.len() == "file-00000-".len() + 30),
+        "a cut-off name was reported"
+    );
+}

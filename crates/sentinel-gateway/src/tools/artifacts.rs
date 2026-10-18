@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifacts::ArtifactRecord;
 use crate::mcp::results::Detail;
-use crate::tools::files::{Encoding, encode};
+use crate::tools::files::{DEFAULT_PAGE_BYTES, Encoding, encode_page};
 use crate::tools::pipeline::local_tool;
 use crate::tools::{AppContext, UNTRUSTED, bounded};
 
@@ -18,7 +18,7 @@ pub struct ArtifactReadParams {
     pub artifact_id: String,
     /// Byte offset, default 0.
     pub offset: Option<u64>,
-    /// 1-65536 bytes, default 8192.
+    /// 1-65536 bytes, default 4096.
     pub length: Option<u32>,
     /// utf8 (default) or base64.
     pub encoding: Option<Encoding>,
@@ -38,18 +38,18 @@ pub struct ArtifactReadData {
 
 pub async fn ssh_artifact_read(ctx: &AppContext, p: ArtifactReadParams) -> Result<ResultEnvelope<ArtifactReadData>> {
     let id = ArtifactId::parse(&p.artifact_id)?;
-    let length = bounded(p.length, 8192, 65536, "length")?;
+    let length = bounded(p.length, DEFAULT_PAGE_BYTES, 65536, "length")?;
     local_tool(ctx, "ssh_artifact_read", || async move {
         let offset = p.offset.unwrap_or(0);
         let (bytes, artifact) = ctx.artifacts.read_range(&ctx.principal, &id, offset, length).await?;
         let encoding = p.encoding.unwrap_or_default();
-        let content = encode(&bytes, encoding)?;
-        let eof = offset + bytes.len() as u64 >= artifact.bytes;
+        let (content, used) = encode_page(&bytes, encoding, offset + bytes.len() as u64 >= artifact.bytes)?;
+        let eof = offset + used as u64 >= artifact.bytes;
         Ok((
             ArtifactReadData {
                 artifact,
                 offset,
-                bytes_returned: bytes.len() as u32,
+                bytes_returned: used as u32,
                 eof,
                 encoding,
                 content,

@@ -17,6 +17,8 @@ struct Inner {
     max_active: usize,
     per_host_limit: usize,
     per_host: Mutex<HashMap<HostId, Arc<Semaphore>>>,
+    /// Bulk transfers: one per host, separate from the interactive read pool (spec §11.3).
+    per_host_transfers: Mutex<HashMap<HostId, Arc<Semaphore>>>,
     pending: AtomicUsize,
     max_pending: usize,
     queue_wait: Duration,
@@ -56,6 +58,7 @@ impl Scheduler {
                 max_active: b.max_active_operations,
                 per_host_limit: b.per_host_reads,
                 per_host: Mutex::new(HashMap::new()),
+                per_host_transfers: Mutex::new(HashMap::new()),
                 pending: AtomicUsize::new(0),
                 max_pending: b.max_pending_operations,
                 queue_wait: Duration::from_secs(b.queue_wait_secs),
@@ -63,14 +66,25 @@ impl Scheduler {
         }
     }
 
-    fn host_semaphore(&self, host: &HostId) -> Arc<Semaphore> {
-        let mut m = self.inner.per_host.lock().expect("per-host semaphores");
-        m.entry(host.clone())
-            .or_insert_with(|| Arc::new(Semaphore::new(self.inner.per_host_limit)))
-            .clone()
+    fn host_semaphore(map: &Mutex<HashMap<HostId, Arc<Semaphore>>>, host: &HostId, permits: usize) -> Arc<Semaphore> {
+        let mut m = map.lock().expect("per-host semaphores");
+        m.entry(host.clone()).or_insert_with(|| Arc::new(Semaphore::new(permits))).clone()
     }
 
+    /// One of the per-host interactive read slots plus a global slot.
     pub async fn acquire_read(&self, host: &HostId) -> Result<ReadPermit> {
+        let sem = Self::host_semaphore(&self.inner.per_host, host, self.inner.per_host_limit);
+        self.acquire(sem).await
+    }
+
+    /// The host's single bulk-transfer slot plus a global slot. Never takes a read slot, so a long download cannot
+    /// stall inspection of the same host.
+    pub async fn acquire_transfer(&self, host: &HostId) -> Result<ReadPermit> {
+        let sem = Self::host_semaphore(&self.inner.per_host_transfers, host, 1);
+        self.acquire(sem).await
+    }
+
+    async fn acquire(&self, host_sem: Arc<Semaphore>) -> Result<ReadPermit> {
         let i = &self.inner;
         if i.pending.fetch_add(1, Ordering::SeqCst) >= i.max_pending {
             i.pending.fetch_sub(1, Ordering::SeqCst);
@@ -79,7 +93,6 @@ impl Scheduler {
                 .with_retry(RetryStrategy::RetryAfter { seconds: 1 }));
         }
         let _pending = PendingGuard(&i.pending);
-        let host_sem = self.host_semaphore(host);
         // Host permit first: a waiter blocked on a saturated host must not hold a global slot other hosts need.
         let acquire = async {
             let h = host_sem.acquire_owned().await.expect("semaphore never closed");

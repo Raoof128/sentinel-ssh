@@ -196,3 +196,35 @@ fn failed_envelope_carries_typed_error() {
     let u: BoundedEnvelope<()> = failed_envelope(OperationId::generate(), None, SentinelError::new(ErrorCode::OutcomeUnknown, "u"));
     assert_eq!(serde_json::to_value(&u).unwrap()["outcome"], "outcome_unknown");
 }
+
+/// Final review #5: a 4 KiB page as base64 fits the default result.
+#[tokio::test]
+async fn base64_default_page_fits_inline() {
+    use base64::Engine;
+    let (_d, store) = fresh();
+    let content = base64::engine::general_purpose::STANDARD.encode(vec![0xffu8; 4096]);
+    let env = ResultEnvelope::succeeded(
+        OperationId::generate(),
+        None,
+        serde_json::json!({ "content": content, "artifact": { "id": "x".repeat(40) } }),
+    );
+    let b = bound_envelope(&store, &me().id, env, Detail::Concise, &Budgets::default())
+        .await
+        .unwrap();
+    assert!(!b.truncated);
+}
+
+/// Final review #5: reading an artefact never spills into a new artefact.
+#[tokio::test]
+async fn inline_only_bound_refuses_instead_of_spilling() {
+    let (_d, store) = fresh();
+    let env = ResultEnvelope::succeeded(OperationId::generate(), None, serde_json::json!({ "text": "x".repeat(20_000) }));
+    let e = sentinel_gateway::mcp::results::bound_envelope_inline(env, Detail::Concise, &Budgets::default()).unwrap_err();
+    assert_eq!(e.code, ErrorCode::BudgetExceeded);
+    assert!(
+        e.message.contains("smaller length") || e.message.contains("detail"),
+        "{}",
+        e.message
+    );
+    assert_eq!(std::fs::read_dir(store.dir()).unwrap().count(), 0);
+}

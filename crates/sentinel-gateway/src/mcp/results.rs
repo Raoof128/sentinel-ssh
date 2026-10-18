@@ -161,6 +161,24 @@ pub async fn bound_envelope<T: Serialize>(
     Ok(out)
 }
 
+/// Like [`bound_envelope`] but never creates an artefact: used by `ssh_artifact_read`, where spilling a page of an
+/// artefact into a new artefact would repeat without end. Over the limit is `BUDGET_EXCEEDED`.
+pub fn bound_envelope_inline<T: Serialize>(env: ResultEnvelope<T>, detail: Detail, b: &Budgets) -> Result<BoundedEnvelope<T>> {
+    let limit = match detail {
+        Detail::Concise => b.default_result_bytes,
+        Detail::Full => b.max_result_bytes,
+    };
+    let size = serde_json::to_vec(&env).map(|v| v.len()).unwrap_or(usize::MAX);
+    if size > limit {
+        return Err(SentinelError::new(
+            ErrorCode::BudgetExceeded,
+            format!("this page is {size} bytes as JSON, over the {limit} byte result limit; request a smaller length or detail=full"),
+        ));
+    }
+    let (head, data) = split(env);
+    Ok(from_parts(head, Some(data)))
+}
+
 pub fn failed_envelope<T>(operation_id: OperationId, host_id: Option<HostId>, err: SentinelError) -> BoundedEnvelope<T> {
     let cancelled = err.details.get("cancelled").and_then(|v| v.as_bool()) == Some(true);
     let outcome = match err.code {

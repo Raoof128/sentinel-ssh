@@ -240,7 +240,11 @@ where
         max_stderr_bytes: 16 * 1024,
     };
     let result = async {
-        let _permit = ctx.scheduler.acquire_read(&host_id).await?;
+        let _permit = if effect == Effect::Export {
+            ctx.scheduler.acquire_transfer(&host_id).await?
+        } else {
+            ctx.scheduler.acquire_read(&host_id).await?
+        };
         ctx.operations.mark_running(&op.id);
         let extras = Arc::new(Mutex::new(Extras::default()));
         let run = ToolRun {
