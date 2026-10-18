@@ -951,6 +951,7 @@ dependencies = [
  "proptest",
  "regex",
  "rmcp",
+ "rustix",
  "schemars",
  "sentinel-core",
  "sentinel-testkit",
