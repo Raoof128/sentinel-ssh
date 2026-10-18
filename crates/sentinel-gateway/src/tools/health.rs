@@ -108,7 +108,11 @@ pub async fn ssh_health_check(ctx: &AppContext, p: HealthCheckParams) -> Result<
                     let svc = service_config(&run.ctx, run.host.id.as_str(), service)?.clone();
                     let out = run.run(&systemctl(&svc).flag("is-active").flag("--").arg(&svc.unit)).await?;
                     let state = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-                    ("service_active", state == "active", serde_json::json!({ "active_state": state }))
+                    let observation = serde_json::json!({
+                        "active_state": sentinel_core::scope::display_escape(&state),
+                        "content_trust": crate::tools::UNTRUSTED,
+                    });
+                    ("service_active", state == "active", observation)
                 }
             };
             Ok(HealthResult {

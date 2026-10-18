@@ -1,54 +1,65 @@
 # SentinelSSH
 
-Policy-scoped SSH inspection for AI agents, over MCP.
+**Policy-scoped SSH inspection for AI agents, over the Model Context Protocol.**
 
-**v0.1 is observer mode:** a local stdio MCP server that gives an agent 17 typed, read-only tools over native OpenSSH to Linux hosts you register. There is no raw shell tool. Paths are always a registered root alias plus a relative path; services, log sources and health checks are configuration ids. File bytes never enter model context: downloads become SHA-256-verified artefacts the agent reads by handle.
+SentinelSSH is a local MCP server that lets an AI agent inspect Linux hosts you register, through 17 typed, read-only tools, without ever handing it a shell. It speaks MCP on stdio and reaches the hosts with your system's native OpenSSH client.
 
-Design spec: [`SentinelSSH_Comprehensive_Plan_2026-10-18.md`](SentinelSSH_Comprehensive_Plan_2026-10-18.md). Tool contracts: [`docs/tool-contracts.md`](docs/tool-contracts.md) (generated). Decisions: [`docs/adrs/ADR-001-interfaces-and-backend.md`](docs/adrs/ADR-001-interfaces-and-backend.md).
+```text
+ AI agent ──MCP (stdio)──▶ sentinel-ssh ──OpenSSH──▶ registered Linux hosts
+                           │ policy, scope, budgets,
+                           │ host-key pinning, artefacts
+```
 
-## Guarantees and limits
+> **The gateway enforces the tool interface. The SSH account may permit more; it is not a remote sandbox.**
+> v0.1 is *observer mode*: every guarantee lives in the gateway, not on the host. Use a dedicated, low-privilege account. See the [security model](docs/security-model.md).
 
-> The gateway enforces the tool interface. The SSH account may permit more; it is not a remote sandbox.
+## Why
 
-What v0.1 does enforce, and tests:
+Giving an agent `ssh host 'any command'` gives it everything the account can do, and puts every byte it reads into model context. SentinelSSH takes the opposite approach:
 
-- Host keys are pinned per host. An unknown or changed key stops dispatch (`HOST_KEY_CHANGED`, retry `never`).
-- The SSH client runs with `-F /dev/null` (no user or system config file) and an explicit option set: no agent, X11 or port forwarding, no proxy or local commands, no TTY. Before the first dispatch to each host, `ssh -G` confirms the effective configuration. If the configured identity file is missing the gateway refuses, because OpenSSH would otherwise fall back to your default `~/.ssh` keys.
-- Every call is checked against deny-by-default policy before anything reaches the host. Exports (downloads) need `export = true` on the root.
-- `..`, absolute paths, empty components, control characters and over-long paths are rejected. On the host, targets are pinned before they are read. A directory is entered with `cd -P` and its resolved working directory must lie inside the resolved root. A file is opened once on a descriptor, and that descriptor's real path, type and link count are checked; only the descriptor is then read. Swapping a path for a symlink between check and read therefore cannot redirect the read. A final symlink, a special file (FIFO, device) and a hard-linked file (more than one name) are refused. Log sources must resolve to exactly their configured path.
-- A root the principal may not read stays excluded when it sits inside one it may: listings skip it, disk usage over a parent of it is refused, and it is answered as an unknown root, so a denial does not confirm that it exists.
-- Every remote command runs under `timeout` on the host as well as locally, so a hung command is killed there and does not linger.
-- Results are bounded (8 KiB by default, 64 KiB with `detail: "full"`). Larger results move to a private artefact. Failure envelopes clip echoed input and set MCP `isError`.
-- Resources are bounded: a 1 MiB limit on each request line, a 4096-record operation registry, per-host and global pending queues, and range-checked budgets. A client's `notifications/cancelled`, or a cancelled batch, cancels the operations it started.
-- Remote text is labelled `content_trust: "untrusted"`. Control, format, bidirectional and default-ignorable characters are escaped. Best-effort redaction removes credentials from process arguments; it is a filter, not a guarantee. The process list hides the gateway's own shell, `timeout` wrapper and session.
+- **No raw shell.** No tool runs an arbitrary command. Each tool builds its own fixed remote command, with every value shell-quoted.
+- **Names, not paths.** An agent addresses a registered *root alias* plus a relative path (`root: "app", path: "logs/api.log"`). Services, log sources and health checks are configuration ids, never unit names, file paths or URLs.
+- **Deny by default.** Every call is authorised against the configuration before anything reaches the host. Downloads need `export = true` on the root.
+- **Bytes stay out of context.** Downloads become SHA-256-verified, owner-only *artefacts*, which the agent reads by handle and range. Results are bounded, and anything larger moves to an artefact.
+- **Typed outcomes.** Every result is an envelope with an `operation_id`, an `outcome` and either `data` or a typed `error` that says how to retry.
 
-What v0.1 does **not** do:
+## Features
 
-- **No remote enforcement.** Anyone holding the observer account's key can run anything that account may run. Use a dedicated, low-privilege account. The Stage 2 broker adds host-side enforcement.
-- **Pinning is done by a shell prologue, not a broker.** It relies on GNU `realpath`, `stat` and `/dev/fd` on the host, and on the account not being able to tamper with the host's own utilities. The Stage 2 broker moves this into a protected process.
-- **Roots should be real directories.** A root whose own path is a symlink resolves for containment, but listing the root itself is refused as "not a directory".
-- **Cancellation is not confirmed remotely.** Cancelling signals the local `ssh` process, and the host-side `timeout` ends the command at the latest when the read timeout expires; `remote_termination` stays `unconfirmed`.
-- **No changes.** Plan, approve, apply and upload come in v0.2. Every `Change`, `Stage` and `Plan` effect is denied.
-- **ControlMaster.** The client keeps an authenticated connection open for 60 s after the last call. The socket lives in the gateway's private runtime directory and its name is a digest of the host's trust identity (host id, address, user, pinned key, credential).
-- **SSH configuration files are not read.** `-F /dev/null` makes OpenSSH ignore both `~/.ssh/config` and the system-wide `/etc/ssh/ssh_config`. This was verified: `SendEnv` and `XAuthLocation` set in the system file disappear from `ssh -G`. The effective configuration is still checked with `ssh -G` before the first dispatch to each host.
+| Area | What v0.1 provides |
+|---|---|
+| Inspection | Host facts, disk usage, process list (with credential redaction), systemd service state, registered HTTP or service health checks |
+| Files | Directory listing with paging, ranged reads (UTF-8 or base64), stat, SHA-256 |
+| Logs | Fixed-string search of registered log sources, optionally over the last N bytes only |
+| Transfer | Download to a verified local artefact; ranged artefact reads |
+| Control | Operation lookup and cancellation, batches of up to 16 reads, a capabilities self-description |
+| SSH | Pinned host keys, `-F /dev/null`, an explicit option set, effective-config verification, connection reuse |
+| Containment | Targets pinned on the host by `realpath` and an open descriptor; symlinks, special files and hard links refused; `..` never accepted |
+| Limits | Result, transfer, queue, concurrency, timeout and input-size budgets, all range-checked |
+| Protocol | MCP `2026-07-28` (`server/discover`) and `2025-11-25` (`initialize`) |
 
-## Quickstart
+The full list is in the [tool reference](docs/tools.md).
 
-1. On the target host, create a dedicated account with a POSIX login shell (`sh`, `bash` or `dash`), plus a key used only by SentinelSSH:
+## Quick start
+
+You need Rust 1.97 (pinned by `rust-toolchain.toml`), OpenSSH 8.9 or newer on the gateway machine, and a Linux host with GNU userland.
+
+```bash
+cargo install --locked --path crates/sentinel-gateway
+```
+
+1. On the host, create a dedicated account and give it a key used only by SentinelSSH:
    ```bash
    sudo useradd -m -s /bin/sh sentinel-observer
    ```
-   Add the public half of a new key to `~sentinel-observer/.ssh/authorized_keys`. Give the account read access only to what you will register.
-2. Get the host key **through a channel you trust** (the console, your cloud provider's dashboard, or `ssh-keygen -lf` run on the host), not just from the network:
+2. Fetch the host key **through a channel you trust** (the console or your provider's dashboard, not the network you are about to trust):
    ```bash
    cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub
    ```
-3. Write `~/.config/sentinel-ssh/config.toml` and make it owner-only (`chmod 600`):
+3. Write `~/.config/sentinel-ssh/config.toml` with mode `0600`:
    ```toml
    schema_version = 1
 
    [gateway]
-   # artifact_dir, runtime_dir and ssh_binary have sensible defaults
 
    [principal]
    id = "me"
@@ -67,68 +78,43 @@ What v0.1 does **not** do:
    read = true
    export = true
 
-   [hosts.services.api]
-   unit = "app-api.service"
-   scope = "system"
-
    [hosts.log_sources.api]
    path = "/var/log/app/api.log"
-
-   [hosts.health_checks.api_http]
-   kind = "http"
-   url = "http://127.0.0.1:8080/health"
-   expect_status = 200
-   timeout_secs = 5
    ```
 4. Check the setup. This never changes anything on the host:
    ```bash
    sentinel-ssh doctor --connect
    ```
-5. Register it as a stdio MCP server in your client, for example Claude Code:
+5. Register the server with your MCP client, for example Claude Code:
    ```bash
    claude mcp add sentinel-ssh -- sentinel-ssh serve
    ```
 
-## Tools
+The [getting-started guide](docs/getting-started.md) walks through each step, and the [configuration reference](docs/configuration.md) covers every field.
 
-`ssh_hosts_list`, `ssh_host_inspect`, `ssh_health_check`, `ssh_disk_usage`, `ssh_process_list`, `ssh_service_status`, `ssh_logs_search`, `ssh_files_list`, `ssh_file_read`, `ssh_file_stat`, `ssh_file_hash`, `ssh_batch_inspect`, `ssh_operation_get`, `ssh_operation_cancel`, `ssh_artifact_read`, `ssh_capabilities_get`, `ssh_transfer_download`.
+## Documentation
 
-Each result is an envelope with `schema_version`, `operation_id` and `outcome`, plus either `data` or a typed `error` with a `retry` strategy. Only malformed calls are JSON-RPC errors. Both MCP `2026-07-28` (`server/discover`, per-request `_meta`) and `2025-11-25` (`initialize`) are supported.
+| Document | Contents |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install, prepare a host, configure, verify, connect a client |
+| [Configuration reference](docs/configuration.md) | Every field, default, range and validation rule |
+| [Tool reference](docs/tools.md) | The 17 tools, their parameters, results and refusals |
+| [Results and errors](docs/results-and-errors.md) | Envelopes, outcomes, error codes, retry strategies, operations |
+| [Security model](docs/security-model.md) | Threat model, guarantees, limits, containment design |
+| [Architecture](docs/architecture.md) | Crates, the request pipeline, the SSH backend, the remote prologue |
+| [Operations](docs/operations.md) | Running, logging, artefacts, troubleshooting |
+| [Development](docs/development.md) | Building, the quality gate, the test fixture |
+| [Supported platforms](docs/supported-platforms.md) | Gateway and target-host requirements |
+| [Tool contracts](docs/tool-contracts.md) | Generated JSON Schemas for every tool |
+| [ADR-001](docs/adrs/ADR-001-interfaces-and-backend.md) | Interface and backend decisions |
+| [Design spec](SentinelSSH_Comprehensive_Plan_2026-10-18.md) | The full product vision this release implements part of |
 
-## Target host requirements
+## Project status
 
-Linux with GNU coreutils, findutils, procps and grep, plus `curl` for HTTP health checks. systemd is optional; without it, service tools return `CAPABILITY_UNSUPPORTED`. The account's login shell must be POSIX `sh` compatible. See [`docs/supported-platforms.md`](docs/supported-platforms.md).
+v0.1 is a **development release**, not a supported product. It implements the spec's observer mode. Later stages are not built yet: a protected host-side broker, approvals and changes, uploads, signed releases and an independent security review. See the [changelog](CHANGELOG.md).
 
-## Development
+Security issues: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-The quality gate runs every check below and fails on the first problem:
+## Licence
 
-```bash
-bash scripts/check.sh
-```
-
-It runs fmt, clippy with warnings as errors, a `forbid(unsafe_code)` check, a secret scan of tracked files, a scan of remote flag literals, and tool-contract freshness. It then starts the Docker sshd fixture and runs every test under `cargo llvm-cov`, requiring every product source line to execute at least once. `--quick` skips Docker and coverage; `--large` adds the 256 MiB download. Coverage needs `cargo install cargo-llvm-cov --locked` and `rustup component add llvm-tools-preview`.
-
-For a fast loop without Docker:
-
-```bash
-cargo test --workspace
-```
-
-End-to-end tests run against a disposable Docker sshd with synthetic data (Docker must be running):
-
-```bash
-bash scripts/fixture-up.sh
-```
-
-```bash
-set -a && . target/fixture/fixture.env && set +a && cargo test --workspace
-```
-
-Add `LARGE=1` to `fixture-up.sh` and `-- --include-ignored` to the test run for the 256 MiB download test. Run `bash scripts/fixture-down.sh` to remove the fixture. Never point the tests at a live host.
-
-Regenerate the tool contracts after a schema change with `bash scripts/gen-tool-contracts.sh`.
-
-## Status
-
-v0.1.0 is a development release, not a supported product. The spec's Stage 2 (protected broker, approvals, upload) through Stage 5 (signed releases, independent security review) are not built yet. Licence: not yet chosen; all rights reserved.
+No licence has been chosen yet. Until one is, all rights are reserved: you may read the code, but you have no right to use, modify or redistribute it.

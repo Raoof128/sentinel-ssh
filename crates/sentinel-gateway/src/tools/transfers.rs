@@ -20,8 +20,7 @@ use crate::tools::files::{hash_command, parse_hash, scoped};
 use crate::tools::pipeline::{has_io_error, read_tool, remote_failure};
 use crate::tools::{AppContext, UNTRUSTED};
 
-pub const NEXT_ACTION: &str =
-    "read ranges with ssh_artifact_read or retrieve the artefact with the operator CLI; bytes were not placed in model context";
+pub const NEXT_ACTION: &str = "read ranges with ssh_artifact_read; the bytes were not placed in model context";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

@@ -633,3 +633,30 @@ async fn process_list_hides_the_gateways_own_processes() {
         ErrorCode::RemoteFailure
     );
 }
+
+/// Docs fact-check: the service_active observation is remote text like any other.
+#[tokio::test]
+async fn service_active_observation_is_escaped_and_untrusted() {
+    let fake = FakeBackend::new().on("is-active", "act\u{202E}ive\n".as_bytes().to_vec());
+    let e = ssh_health_check(
+        &ctx_with(fake),
+        HealthCheckParams {
+            host_id: "h1".into(),
+            check_id: "api_active".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!e.data.passing);
+    assert_eq!(e.data.observation["active_state"], "act\\u{202E}ive");
+    assert_eq!(e.data.observation["content_trust"], "untrusted");
+}
+
+/// Docs fact-check: the download's next step must name a real tool, not a CLI command that does not exist.
+#[test]
+fn download_next_action_names_only_real_tools() {
+    let n = sentinel_gateway::tools::transfers::NEXT_ACTION;
+    assert!(n.contains("ssh_artifact_read"), "{n}");
+    assert!(!n.contains("CLI"), "{n}");
+}
