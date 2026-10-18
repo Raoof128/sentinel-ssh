@@ -8,3 +8,5 @@
 BusyBox and non-GNU utilities are not supported: tools that depend on missing options return `CAPABILITY_UNSUPPORTED` rather than guessing.
 
 Command templates were verified against Ubuntu 24.04.3 (OpenSSH 9.6p1, kernel 6.8) on 18 October 2026.
+
+The target account's login shell must be POSIX `sh` compatible (`sh`, `dash`, `bash`, `zsh`): OpenSSH sends each remote command as one string interpreted by that shell. `fish` and `csh` accounts are not supported.
