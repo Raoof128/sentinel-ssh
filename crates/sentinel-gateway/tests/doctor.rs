@@ -117,3 +117,14 @@ fn an_ssh_binary_others_can_modify_fails() {
     let c = check(&r, "ssh.binary");
     assert!(!c.ok && c.detail.contains("writable by other users"), "{c:?}");
 }
+
+/// Red team L4: a hostile server's stderr (terminal escapes) must not be able to draw a fake "[ok]" line.
+#[test]
+fn connect_failure_details_are_escaped() {
+    let f = fx();
+    let cfg = f.with_ssh("printf '\\033]0;PWNED\\a\\033[1A[ok] host.h1.connect: fine\\n' >&2; exit 255");
+    let r = run_doctor(&cfg, true);
+    let c = check(&r, "host.h1.connect");
+    assert!(!c.ok);
+    assert!(!c.detail.contains('\u{1b}') && c.detail.contains("\\u{1B}"), "{:?}", c.detail);
+}

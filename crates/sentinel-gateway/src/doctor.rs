@@ -65,7 +65,7 @@ pub fn run_doctor(config_path: &Path, connect: bool) -> DoctorReport {
                 Ok(()) => r.push(format!("host.{}.identity", h.id), true, path.display().to_string()),
                 Err(e) => r.push(format!("host.{}.identity", h.id), false, e.message),
             },
-            AuthConfig::Agent => {
+            AuthConfig::Agent { .. } => {
                 let ok = std::env::var_os("SSH_AUTH_SOCK").is_some();
                 r.push(
                     format!("host.{}.identity", h.id),
@@ -111,7 +111,7 @@ fn check_ssh_binary(r: &mut DoctorReport, bin: &Path) {
         r.push("ssh.binary", false, e.message);
         return;
     }
-    match Command::new(bin).arg("-V").output() {
+    match Command::new(bin).arg("-V").env_clear().env("PATH", "/usr/bin:/bin").output() {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stderr).trim().to_string();
             match parse_openssh_version(&text) {

@@ -19,7 +19,7 @@ pub fn doctor_connect(cfg: &Config) -> Vec<(String, bool, String)> {
         .enable_all()
         .build()
         .expect("a current-thread runtime always builds");
-    let backend = match OpenSshBackend::new(&cfg.gateway) {
+    let backend = match OpenSshBackend::unmultiplexed(&cfg.gateway) {
         Ok(b) => b,
         Err(e) => return vec![("connect".into(), false, e.message)],
     };
@@ -37,7 +37,8 @@ pub fn doctor_connect(cfg: &Config) -> Vec<(String, bool, String)> {
                 Ok(o) if o.exit == ExitKind::Code(0) => (name, true, format!("connected in {} ms", o.duration.as_millis())),
                 Ok(o) => {
                     let code = classify_ssh_failure(&o.exit, &o.stderr);
-                    let msg = String::from_utf8_lossy(&o.stderr).trim().to_owned();
+                    // A hostile server controls this text: escape it so it cannot draw on the operator's terminal.
+                    let msg = sentinel_core::scope::display_escape(String::from_utf8_lossy(&o.stderr).trim());
                     (name, false, format!("{code:?}: {msg}"))
                 }
                 Err(e) => (name, false, format!("{:?}: {}", e.code, e.message)),

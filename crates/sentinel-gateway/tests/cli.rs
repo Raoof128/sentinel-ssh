@@ -141,3 +141,24 @@ fn serve_with_a_bad_config_exits_with_an_error() {
     assert!(!o.status.success());
     assert!(text(&o).contains("sentinel-ssh: cannot read config file"), "{}", text(&o));
 }
+
+/// Red team L5: `ssh -V` in doctor must not inherit the parent environment.
+#[test]
+fn doctor_runs_ssh_version_with_a_clean_environment() {
+    let dirs = TestDirs::new();
+    let script = fake_ssh_script(
+        dirs.state.path(),
+        "fake-ssh",
+        "echo \"OpenSSH_10.3p1 seen=[$SECRET_FROM_PARENT]\" >&2",
+    );
+    let cfg = write_config(&dirs, &dirs.state.path().join("c.toml"), |t| {
+        t.replace("ssh_binary = \"/usr/bin/ssh\"", &format!("ssh_binary = \"{}\"", script.display()))
+    });
+    let o = bin()
+        .args(["doctor", "--config"])
+        .arg(&cfg)
+        .env("SECRET_FROM_PARENT", "leak")
+        .output()
+        .unwrap();
+    assert!(text(&o).contains("seen=[]"), "{}", text(&o));
+}

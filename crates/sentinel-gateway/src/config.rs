@@ -169,8 +169,14 @@ impl<'de> Deserialize<'de> for HostKey {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuthConfig {
-    IdentityFile { path: PathBuf },
-    Agent,
+    IdentityFile {
+        path: PathBuf,
+    },
+    /// Keys from ssh-agent. `public_key` restricts the offer to that one agent key (spec §9.2 "restricted agent access").
+    Agent {
+        #[serde(default)]
+        public_key: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -432,6 +438,10 @@ pub fn load_config(path: &Path) -> Result<Config> {
         if let AuthConfig::IdentityFile { path } = &mut h.auth {
             *path = expand_tilde(path);
             plain_absolute(path, &format!("host '{}' identity file", h.id))?;
+        }
+        if let AuthConfig::Agent { public_key: Some(p) } = &mut h.auth {
+            *p = expand_tilde(p);
+            plain_absolute(p, &format!("host '{}' agent public key", h.id))?;
         }
         for (alias, r) in &h.roots {
             if !valid_alias(alias) {

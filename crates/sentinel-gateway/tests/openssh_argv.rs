@@ -373,7 +373,7 @@ fn agent_auth_disables_default_identity_files() {
     let (_dirs, cfg) = setup();
     let b = OpenSshBackend::new(&cfg.gateway).unwrap();
     let mut h = host(&cfg);
-    h.auth = sentinel_gateway::config::AuthConfig::Agent;
+    h.auth = sentinel_gateway::config::AuthConfig::Agent { public_key: None };
     let argv: Vec<String> = b
         .build_argv(&h, &RemoteCommand::new("true"))
         .iter()
@@ -435,7 +435,7 @@ async fn unsafe_effective_config_refuses_dispatch() {
         assert!(e.message.contains(needle), "missing {needle:?} in {}", e.message);
     }
     let mut agent = host(&cfg);
-    agent.auth = sentinel_gateway::config::AuthConfig::Agent;
+    agent.auth = sentinel_gateway::config::AuthConfig::Agent { public_key: None };
     let e = b.check_effective_config(&agent).unwrap_err();
     assert!(e.message.contains("agent auth must not offer on-disk keys"), "{}", e.message);
 }
@@ -545,4 +545,44 @@ fn ssh_binary_must_not_be_writable_by_others() {
     cfg.gateway.ssh_binary = bin;
     let e = OpenSshBackend::new(&cfg.gateway).unwrap_err();
     assert!(e.message.contains("writable by other users"), "{}", e.message);
+}
+
+/// Red team L2: doctor --connect must prove the pin with a fresh connection, not ride a warm master.
+#[test]
+fn unmultiplexed_backend_never_uses_a_master() {
+    let (_dirs, cfg) = setup();
+    let b = OpenSshBackend::unmultiplexed(&cfg.gateway).unwrap();
+    let argv: Vec<String> = b
+        .build_argv(&host(&cfg), &RemoteCommand::new("true"))
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(argv.contains(&"ControlMaster=no".to_string()), "{argv:?}");
+    assert!(
+        !argv
+            .iter()
+            .any(|a| a.starts_with("ControlPath=") || a.starts_with("ControlPersist=")),
+        "{argv:?}"
+    );
+}
+
+/// Red team L3: agent auth can be pinned to one agent key, so other keys the agent holds are never offered.
+#[test]
+fn agent_auth_can_be_restricted_to_one_public_key() {
+    let (dirs, cfg) = setup();
+    let pubkey = dirs.state.path().join("agent_key.pub");
+    std::fs::write(&pubkey, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample agent\n").unwrap();
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let mut h = host(&cfg);
+    h.auth = sentinel_gateway::config::AuthConfig::Agent {
+        public_key: Some(pubkey.clone()),
+    };
+    let argv: Vec<String> = b
+        .build_argv(&h, &RemoteCommand::new("true"))
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(argv.contains(&"IdentitiesOnly=yes".to_string()), "{argv:?}");
+    assert!(argv.contains(&format!("IdentityFile={}", pubkey.display())), "{argv:?}");
+    b.check_effective_config(&h).unwrap();
 }

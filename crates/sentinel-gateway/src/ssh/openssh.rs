@@ -37,7 +37,12 @@ pub fn trust_digest(host: &HostConfig) -> String {
             let content = std::fs::read(path).map(|b| hex::encode(Sha256::digest(b))).unwrap_or_default();
             format!("identity_file:{}:{content}", path.display())
         }
-        AuthConfig::Agent => "agent".to_owned(),
+        AuthConfig::Agent { public_key } => {
+            let pinned = public_key
+                .as_ref()
+                .map(|p| std::fs::read(p).map(|b| hex::encode(Sha256::digest(b))).unwrap_or_default());
+            format!("agent:{}", pinned.unwrap_or_default())
+        }
     };
     let material = [
         host.id.as_str(),
@@ -57,6 +62,8 @@ pub struct OpenSshBackend {
     runtime_dir: PathBuf,
     /// (device, inode) of the runtime directory at start; re-checked before every spawn.
     runtime_identity: (u64, u64),
+    /// Reuse connections through a ControlMaster. Off for `doctor`, which must prove the pin on a fresh handshake.
+    multiplex: bool,
     connect_timeout_secs: u64,
     verified_hosts: Mutex<BTreeSet<HostId>>,
 }
@@ -66,7 +73,7 @@ impl HostConfig {
     pub fn auth_identity(&self) -> Option<&Path> {
         match &self.auth {
             AuthConfig::IdentityFile { path } => Some(path),
-            AuthConfig::Agent => None,
+            AuthConfig::Agent { .. } => None,
         }
     }
 }
@@ -145,10 +152,19 @@ impl OpenSshBackend {
         let meta = std::fs::metadata(&settings.runtime_dir).map_err(|e| SentinelError::new(ErrorCode::ConfigInvalid, e.to_string()))?;
         Ok(Self {
             runtime_identity: (meta.dev(), meta.ino()),
+            multiplex: true,
             ssh_binary: settings.ssh_binary.clone(),
             runtime_dir: settings.runtime_dir.clone(),
             connect_timeout_secs: settings.budgets.connect_timeout_secs,
             verified_hosts: Mutex::new(BTreeSet::new()),
+        })
+    }
+
+    /// A backend that never uses a ControlMaster: every call is a full handshake against the pinned key (red team L2).
+    pub fn unmultiplexed(settings: &GatewaySettings) -> Result<Self> {
+        Ok(Self {
+            multiplex: false,
+            ..Self::new(settings)?
         })
     }
 
@@ -218,9 +234,13 @@ impl OpenSshBackend {
         opt("PermitLocalCommand=no".into());
         opt("ProxyCommand=none".into());
         opt("RequestTTY=no".into());
-        opt("ControlMaster=auto".into());
-        opt(format!("ControlPath={}", self.control_path(host).display()));
-        opt("ControlPersist=60".into());
+        if self.multiplex {
+            opt("ControlMaster=auto".into());
+            opt(format!("ControlPath={}", self.control_path(host).display()));
+            opt("ControlPersist=60".into());
+        } else {
+            opt("ControlMaster=no".into());
+        }
         opt("LogLevel=ERROR".into());
         match &host.auth {
             AuthConfig::IdentityFile { path } => {
@@ -230,7 +250,12 @@ impl OpenSshBackend {
                 o.push(path.into());
             }
             // Agent keys only: without this OpenSSH also tries ~/.ssh/id_* from the passwd home (spec §4.4).
-            AuthConfig::Agent => opt("IdentityFile=none".into()),
+            AuthConfig::Agent { public_key: Some(p) } => {
+                // Offer only this agent key (red team L3).
+                opt("IdentitiesOnly=yes".into());
+                opt(format!("IdentityFile={}", p.display()));
+            }
+            AuthConfig::Agent { public_key: None } => opt("IdentityFile=none".into()),
         }
         o.push("-p".into());
         o.push(host.port.to_string().into());
@@ -260,7 +285,7 @@ impl OpenSshBackend {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .process_group(0);
-        if matches!(host.auth, AuthConfig::Agent)
+        if matches!(host.auth, AuthConfig::Agent { .. })
             && let Some(sock) = std::env::var_os("SSH_AUTH_SOCK")
         {
             c.env("SSH_AUTH_SOCK", sock);
@@ -337,6 +362,18 @@ impl OpenSshBackend {
             Some(id) => {
                 if ids != [id.display().to_string()] || get("identitiesonly") != "yes" {
                     bad.push(format!("identityfile={} (expected only {})", ids.join(","), id.display()));
+                }
+            }
+            None if matches!(&host.auth, AuthConfig::Agent { public_key: Some(_) }) => {
+                let AuthConfig::Agent { public_key: Some(p) } = &host.auth else {
+                    unreachable!()
+                };
+                if ids != [p.display().to_string()] || get("identitiesonly") != "yes" {
+                    bad.push(format!(
+                        "identityfile={} (expected only the agent key {})",
+                        ids.join(","),
+                        p.display()
+                    ));
                 }
             }
             None => {
