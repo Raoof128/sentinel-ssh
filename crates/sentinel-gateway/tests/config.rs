@@ -363,3 +363,20 @@ fn trusted_ancestors_are_checked_on_the_resolved_path() {
     let e = check_trusted_executable(&link.join("ssh")).unwrap_err();
     assert!(e.message.contains("writable by other users"), "{}", e.message);
 }
+
+/// Security review: checking only the resolved chain let a symlink kept in a world-writable directory be re-pointed
+/// later. Both the lexical chain and the resolved chain must be trusted.
+#[test]
+fn a_symlink_held_in_an_open_directory_is_refused() {
+    use sentinel_gateway::config::ensure_private_dir;
+    let d = tempfile::tempdir().unwrap();
+    let trusted = d.path().join("trusted");
+    std::fs::create_dir(&trusted).unwrap();
+    write_with_mode(&trusted, 0o755);
+    let open = d.path().join("open");
+    std::fs::create_dir(&open).unwrap();
+    write_with_mode(&open, 0o777);
+    std::os::unix::fs::symlink(&trusted, open.join("link")).unwrap();
+    let e = ensure_private_dir(&open.join("link").join("run")).unwrap_err();
+    assert!(e.message.contains("writable by other users"), "{}", e.message);
+}

@@ -301,7 +301,14 @@ pub fn check_trusted_ancestors(path: &Path, what: &str) -> Result<()> {
     };
     let real =
         std::fs::canonicalize(base).map_err(|e| invalid(format!("{what} {}: cannot resolve {}: {e}", path.display(), base.display())))?;
-    for anc in real.ancestors() {
+    // Both chains: the lexical one (a symlink kept in an open directory could be re-pointed later) and the resolved one
+    // (a symlink's target could sit under an open directory).
+    let lexical: Vec<PathBuf> = base
+        .ancestors()
+        .filter(|a| !a.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .collect();
+    for anc in lexical.iter().map(PathBuf::as_path).chain(real.ancestors()) {
         let meta =
             std::fs::metadata(anc).map_err(|e| invalid(format!("{what} {}: cannot inspect {}: {e}", path.display(), anc.display())))?;
         let sticky = meta.mode() & 0o1000 != 0;
@@ -331,6 +338,7 @@ pub fn check_trusted_executable(path: &Path) -> Result<PathBuf> {
             path.display()
         )));
     }
+    check_trusted_ancestors(path, "ssh_binary")?;
     check_trusted_ancestors(&real, "ssh_binary")?;
     Ok(real)
 }
