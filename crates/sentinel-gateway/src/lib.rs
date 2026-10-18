@@ -7,3 +7,4 @@ pub mod doctor;
 pub mod jobs;
 pub mod mcp;
 pub mod ssh;
+pub mod tools;

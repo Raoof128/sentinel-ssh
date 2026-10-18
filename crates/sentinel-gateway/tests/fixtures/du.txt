@@ -1,0 +1,6 @@
+/dev/vda1      123690532864 84925255680 38748499968      69% /
+
+--SENTINEL--
+1052672	/srv/app/data
+1048576	/srv/app/data/blob.bin
+4096	/srv/app/data/sub

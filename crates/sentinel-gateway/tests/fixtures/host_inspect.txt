@@ -1,0 +1,23 @@
+Linux 6.1.0-28-amd64 x86_64
+
+--SENTINEL--
+4
+
+--SENTINEL--
+0.42 0.31 0.25 2/310 12345
+
+--SENTINEL--
+               total        used        free      shared  buff/cache   available
+Mem:      8323567616  2147483648  1073741824     4251648  5102342144  6012342272
+Swap:              0           0           0
+
+--SENTINEL--
+86400.25 340000.10
+
+--SENTINEL--
+staging-api-1
+
+--SENTINEL--
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+NAME="Debian GNU/Linux"
+VERSION_ID="12"
