@@ -107,3 +107,13 @@ fn connect_with_an_unusable_runtime_dir_fails_cleanly() {
     let c = check(&r, "connect");
     assert!(!c.ok && c.detail.contains("0700"), "{c:?}");
 }
+
+#[test]
+fn an_ssh_binary_others_can_modify_fails() {
+    let f = fx();
+    let cfg = f.with_ssh("echo 'OpenSSH_10.3p1' >&2");
+    std::fs::set_permissions(f.dirs.state.path().join("fake-ssh"), std::fs::Permissions::from_mode(0o777)).unwrap();
+    let r = run_doctor(&cfg, false);
+    let c = check(&r, "ssh.binary");
+    assert!(!c.ok && c.detail.contains("writable by other users"), "{c:?}");
+}

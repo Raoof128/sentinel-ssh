@@ -105,6 +105,12 @@ fn parse_openssh_version(s: &str) -> Option<(u32, u32)> {
 }
 
 fn check_ssh_binary(r: &mut DoctorReport, bin: &Path) {
+    if let Err(e) = crate::config::check_trusted_executable(bin)
+        && bin.exists()
+    {
+        r.push("ssh.binary", false, e.message);
+        return;
+    }
     match Command::new(bin).arg("-V").output() {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stderr).trim().to_string();

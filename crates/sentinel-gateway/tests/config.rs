@@ -300,3 +300,44 @@ fn runtime_dir_budget_matches_the_real_socket_limit() {
         "too long for an SSH ControlPath socket",
     );
 }
+
+/// Red team M1: a private dir inside a directory others can write (and that is not sticky) can be swapped out.
+#[test]
+fn private_dirs_need_trusted_ancestors() {
+    use sentinel_gateway::config::ensure_private_dir;
+    let d = tempfile::tempdir().unwrap();
+    let open = d.path().join("open");
+    std::fs::create_dir(&open).unwrap();
+    write_with_mode(&open, 0o777);
+    let e = ensure_private_dir(&open.join("run")).unwrap_err();
+    assert!(e.message.contains("writable by other users"), "{}", e.message);
+    // A sticky world-writable parent like /tmp is fine: others cannot rename or replace our directory.
+    write_with_mode(&open, 0o1777);
+    assert!(ensure_private_dir(&open.join("run2")).is_ok());
+}
+
+/// Red team M4 / L1 / L6 / info: gateway paths are absolute and free of ssh % tokens; addresses carry no user.
+#[test]
+fn gateway_paths_and_addresses_are_unambiguous() {
+    let f = fx();
+    let m = f.minimal();
+    rejects(
+        &f,
+        &m.replace("ssh_binary = \"/usr/bin/ssh\"", "ssh_binary = \"bin/ssh\""),
+        "must be an absolute path",
+    );
+    rejects(
+        &f,
+        &m.replace("ssh_binary = \"/usr/bin/ssh\"", "ssh_binary = \"/usr/bin/ssh%d\""),
+        "'%'",
+    );
+    let id = f.identity.display().to_string();
+    rejects(&f, &m.replace(&id, &format!("{id}%u")), "'%'");
+    let art = f.dirs.state.path().join("artifacts").display().to_string();
+    rejects(&f, &m.replace(&art, "relative/artifacts"), "must be an absolute path");
+    rejects(
+        &f,
+        &m.replace("address = \"203.0.113.10\"", "address = \"root@203.0.113.10\""),
+        "invalid address",
+    );
+}

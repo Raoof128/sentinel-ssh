@@ -276,10 +276,50 @@ pub fn check_private_file(path: &Path, what: &str) -> Result<()> {
     Ok(())
 }
 
+/// Every existing ancestor of `path` must be owned by root or the current user and must not be writable by group or
+/// others unless it is sticky (like /tmp, where others cannot rename or replace entries they do not own). Otherwise
+/// another account could swap a component out from under the gateway (red team M1).
+pub fn check_trusted_ancestors(path: &Path, what: &str) -> Result<()> {
+    let me = rustix::process::getuid().as_raw();
+    for anc in path.ancestors().skip(1) {
+        if anc.as_os_str().is_empty() {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(anc) else { continue };
+        let sticky = meta.mode() & 0o1000 != 0;
+        if (meta.uid() != 0 && meta.uid() != me) || (meta.mode() & 0o022 != 0 && !sticky) {
+            return Err(invalid(format!(
+                "{what} {}: ancestor {} is owned or writable by other users",
+                path.display(),
+                anc.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The ssh client is code that runs with the credential: it must be an absolute path to a file only root or the
+/// current user can modify, in a trusted directory chain (red team M4).
+pub fn check_trusted_executable(path: &Path) -> Result<()> {
+    if !path.is_absolute() {
+        return Err(invalid(format!("ssh_binary {} must be an absolute path", path.display())));
+    }
+    let meta = std::fs::metadata(path).map_err(|e| invalid(format!("cannot inspect ssh_binary {}: {e}", path.display())))?;
+    let me = rustix::process::getuid().as_raw();
+    if (meta.uid() != 0 && meta.uid() != me) || meta.mode() & 0o022 != 0 {
+        return Err(invalid(format!(
+            "ssh_binary {} is owned or writable by other users",
+            path.display()
+        )));
+    }
+    check_trusted_ancestors(path, "ssh_binary")
+}
+
 /// Creates `dir` (and parents) with mode 0700 if absent, then requires: not a symlink, a directory, owned by the current user,
 /// no group/other permission bits. Used for every gateway-private directory (artefacts, SSH runtime files).
 pub fn ensure_private_dir(dir: &Path) -> Result<()> {
     use std::os::unix::fs::DirBuilderExt;
+    check_trusted_ancestors(dir, "private directory")?;
     if std::fs::symlink_metadata(dir).is_err() {
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -305,6 +345,19 @@ pub fn ensure_private_dir(dir: &Path) -> Result<()> {
             "{} must be mode 0700; found {:o}",
             dir.display(),
             meta.mode() & 0o777
+        )));
+    }
+    Ok(())
+}
+
+fn plain_absolute(p: &Path, what: &str) -> Result<()> {
+    if !p.is_absolute() {
+        return Err(invalid(format!("{what} {} must be an absolute path", p.display())));
+    }
+    if p.as_os_str().to_string_lossy().contains('%') {
+        return Err(invalid(format!(
+            "{what} {} must not contain '%' (OpenSSH expands % tokens in paths)",
+            p.display()
         )));
     }
     Ok(())
@@ -350,6 +403,15 @@ pub fn load_config(path: &Path) -> Result<Config> {
     cfg.gateway.artifact_dir = expand_tilde(&cfg.gateway.artifact_dir);
     cfg.gateway.runtime_dir = expand_tilde(&cfg.gateway.runtime_dir);
     cfg.gateway.ssh_binary = expand_tilde(&cfg.gateway.ssh_binary);
+    // Absolute (so a relative default never lands in the working directory, e.g. with HOME unset) and free of the
+    // % tokens OpenSSH expands in paths, which would make the checked path differ from the used one (red team L1, L6).
+    for (what, p) in [
+        ("artifact_dir", &cfg.gateway.artifact_dir),
+        ("runtime_dir", &cfg.gateway.runtime_dir),
+        ("ssh_binary", &cfg.gateway.ssh_binary),
+    ] {
+        plain_absolute(p, what)?;
+    }
     let cp_len = cfg.gateway.runtime_dir.as_os_str().len() + CONTROL_PATH_SUFFIX;
     if cp_len > MAX_CONTROL_PATH {
         return Err(invalid(format!(
@@ -361,7 +423,7 @@ pub fn load_config(path: &Path) -> Result<Config> {
         if !seen.insert(h.id.clone()) {
             return Err(invalid(format!("duplicate host id '{}'", h.id)));
         }
-        if h.address.is_empty() || h.address.starts_with('-') || h.address.chars().any(|c| c.is_whitespace()) {
+        if h.address.is_empty() || h.address.starts_with('-') || h.address.chars().any(|c| c.is_whitespace() || c == '@' || c == '%') {
             return Err(invalid(format!("host '{}': invalid address", h.id)));
         }
         if h.user.is_empty() || h.user.starts_with('-') || h.user.chars().any(|c| c.is_whitespace() || c == '@') {
@@ -369,6 +431,7 @@ pub fn load_config(path: &Path) -> Result<Config> {
         }
         if let AuthConfig::IdentityFile { path } = &mut h.auth {
             *path = expand_tilde(path);
+            plain_absolute(path, &format!("host '{}' identity file", h.id))?;
         }
         for (alias, r) in &h.roots {
             if !valid_alias(alias) {

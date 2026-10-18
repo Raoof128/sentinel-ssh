@@ -512,3 +512,37 @@ fn control_path_leaves_room_for_the_temporary_suffix() {
     assert!(cp.as_os_str().len() + 17 < 104, "{} bytes", cp.as_os_str().len());
     assert_eq!(cp.file_name().unwrap().len(), "c-".len() + 20);
 }
+
+/// Red team M1: swapping the runtime dir after start (to plant a known_hosts file or a mux socket) stops dispatch.
+#[tokio::test]
+async fn a_replaced_runtime_dir_stops_dispatch() {
+    let (dirs, mut cfg) = setup();
+    with_script(&dirs, &mut cfg, "echo ok");
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    b.run(&host(&cfg), &RemoteCommand::new("true"), &budget(5000), CancellationToken::new())
+        .await
+        .unwrap();
+    let rd = cfg.gateway.runtime_dir.clone();
+    std::fs::rename(&rd, rd.with_extension("old")).unwrap();
+    std::fs::create_dir(&rd).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&rd, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let e = b
+        .run(&host(&cfg), &RemoteCommand::new("true"), &budget(5000), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::ConfigInvalid);
+    assert!(e.message.contains("runtime directory changed"), "{}", e.message);
+}
+
+/// Red team M4: an ssh binary others can modify is local code execution with the credential in reach.
+#[test]
+fn ssh_binary_must_not_be_writable_by_others() {
+    let (dirs, mut cfg) = setup();
+    let bin = sentinel_testkit::configs::fake_ssh_script(dirs.state.path(), "loose-ssh", "exit 0");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o777)).unwrap();
+    cfg.gateway.ssh_binary = bin;
+    let e = OpenSshBackend::new(&cfg.gateway).unwrap_err();
+    assert!(e.message.contains("writable by other users"), "{}", e.message);
+}

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
@@ -19,7 +19,7 @@ use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{AuthConfig, GatewaySettings, HostConfig, check_private_file, ensure_private_dir};
+use crate::config::{AuthConfig, GatewaySettings, HostConfig, check_private_file, check_trusted_executable, ensure_private_dir};
 use crate::ssh::backend::{BackendCapabilities, ExitKind, RunBudget, RunOutcome, SshBackend, StreamBudget, StreamOutcome};
 use crate::ssh::command::RemoteCommand;
 
@@ -55,6 +55,8 @@ pub fn trust_digest(host: &HostConfig) -> String {
 pub struct OpenSshBackend {
     ssh_binary: PathBuf,
     runtime_dir: PathBuf,
+    /// (device, inode) of the runtime directory at start; re-checked before every spawn.
+    runtime_identity: (u64, u64),
     connect_timeout_secs: u64,
     verified_hosts: Mutex<BTreeSet<HostId>>,
 }
@@ -139,7 +141,10 @@ fn stopped(timeout: bool, what: &str) -> SentinelError {
 impl OpenSshBackend {
     pub fn new(settings: &GatewaySettings) -> Result<Self> {
         ensure_private_dir(&settings.runtime_dir)?;
+        check_trusted_executable(&settings.ssh_binary)?;
+        let meta = std::fs::metadata(&settings.runtime_dir).map_err(|e| SentinelError::new(ErrorCode::ConfigInvalid, e.to_string()))?;
         Ok(Self {
+            runtime_identity: (meta.dev(), meta.ino()),
             ssh_binary: settings.ssh_binary.clone(),
             runtime_dir: settings.runtime_dir.clone(),
             connect_timeout_secs: settings.budgets.connect_timeout_secs,
@@ -354,6 +359,15 @@ impl OpenSshBackend {
     /// The first call for a host writes its known_hosts and verifies the effective config while holding the lock, so
     /// concurrent first calls neither race on the file nor skip the check.
     fn preflight(&self, host: &HostConfig) -> Result<()> {
+        // Red team M1: a runtime dir renamed and recreated after start could hold a planted known_hosts file or mux socket.
+        let still_ours = std::fs::symlink_metadata(&self.runtime_dir)
+            .is_ok_and(|m| m.is_dir() && (m.dev(), m.ino()) == self.runtime_identity && m.mode() & 0o077 == 0);
+        if !still_ours {
+            return Err(SentinelError::new(
+                ErrorCode::ConfigInvalid,
+                "the runtime directory changed since the gateway started; restart the gateway",
+            ));
+        }
         if let Some(id) = host.auth_identity() {
             check_private_file(id, "identity file")?;
         }
