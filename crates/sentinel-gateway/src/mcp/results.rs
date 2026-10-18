@@ -150,7 +150,9 @@ pub async fn bound_envelope<T: Serialize>(
             ContentKind::Json,
             &pretty_full,
         )
-        .await?;
+        .await
+        // The operation ran; only its delivery failed. Keep its id so the caller can still look it up.
+        .map_err(|e| e.with_operation(head.operation_id.as_str()))?;
     let mut out: BoundedEnvelope<T> = from_parts(head, None);
     out.truncated = true;
     out.artifact_id = Some(rec.id);
@@ -188,7 +190,29 @@ pub fn bound_envelope_inline<T: Serialize>(env: ResultEnvelope<T>, detail: Detai
     Ok(from_parts(head, Some(data)))
 }
 
-pub fn failed_envelope<T>(operation_id: OperationId, host_id: Option<HostId>, err: SentinelError) -> BoundedEnvelope<T> {
+/// Error text echoes caller input (an alias, a path): keep a failure envelope far inside the smallest result budget.
+const MAX_ERROR_MESSAGE_CHARS: usize = 512;
+const MAX_ERROR_DETAIL_CHARS: usize = 256;
+
+fn clip(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_owned(),
+    }
+}
+
+pub fn failed_envelope<T>(operation_id: OperationId, host_id: Option<HostId>, mut err: SentinelError) -> BoundedEnvelope<T> {
+    err.message = clip(&err.message, MAX_ERROR_MESSAGE_CHARS);
+    for v in err.details.values_mut() {
+        let text = match v {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => Some(v.to_string()),
+            _ => None,
+        };
+        if let Some(t) = text.filter(|t| t.chars().count() > MAX_ERROR_DETAIL_CHARS) {
+            *v = serde_json::Value::String(clip(&t, MAX_ERROR_DETAIL_CHARS));
+        }
+    }
     let cancelled = err.details.get("cancelled").and_then(|v| v.as_bool()) == Some(true);
     let outcome = match err.code {
         ErrorCode::OutcomeUnknown => Outcome::OutcomeUnknown,

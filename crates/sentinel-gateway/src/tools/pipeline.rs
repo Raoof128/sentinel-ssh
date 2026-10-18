@@ -9,7 +9,7 @@ use regex::Regex;
 use sentinel_core::effect::Effect;
 use sentinel_core::envelope::{EvidenceSource, Outcome, ResultEnvelope};
 use sentinel_core::error::{ErrorCode, Result, SentinelError};
-use sentinel_core::identity::HostId;
+use sentinel_core::identity::{HostId, OperationId};
 use sentinel_core::policy::ResourceRef;
 use sentinel_core::scope::ScopedPath;
 
@@ -278,6 +278,32 @@ fn finish_envelope<T>(mut env: ResultEnvelope<T>, extras: &Mutex<Extras>) -> Res
     env
 }
 
+/// While alive, a cancel from the caller (see [`crate::tools::cancelled_by`]) cancels this operation through the registry,
+/// so its state moves to CancelRequested and then Cancelled exactly as with `ssh_operation_cancel`.
+struct CancelLink(Option<tokio::task::JoinHandle<()>>);
+
+impl Drop for CancelLink {
+    fn drop(&mut self) {
+        if let Some(h) = self.0.take() {
+            h.abort();
+        }
+    }
+}
+
+fn link_caller_cancel(ctx: &AppContext, id: &OperationId) -> CancelLink {
+    CancelLink(crate::tools::caller_cancel().map(|token| {
+        let (ops, principal, id) = (ctx.operations.clone(), ctx.principal.clone(), id.clone());
+        tokio::spawn(async move {
+            token.cancelled().await;
+            let _ = ops.cancel(&principal, &id);
+        })
+    }))
+}
+
+fn cancelled_while_queued() -> SentinelError {
+    SentinelError::new(ErrorCode::Timeout, "cancelled while queued").with_detail("cancelled", true)
+}
+
 /// Host-scoped tools. `resource` is evaluated against `host_id` before anything else touches the host.
 pub async fn read_tool<T, F, Fut>(
     ctx: &AppContext,
@@ -302,6 +328,7 @@ where
         .cloned()
         .ok_or_else(|| SentinelError::new(ErrorCode::PolicyDenied, sentinel_core::policy::HOST_UNAVAILABLE))?;
     let op = ctx.operations.begin(&ctx.principal, Some(&host_id), tool, effect);
+    let _link = link_caller_cancel(ctx, &op.id);
     let b = &ctx.config.gateway.budgets;
     let budget = RunBudget {
         timeout: Duration::from_secs(b.read_timeout_secs),
@@ -319,9 +346,7 @@ where
         // A cancel while waiting for a slot ends the operation before anything is dispatched.
         let _permit = tokio::select! {
             p = acquire => p?,
-            _ = op.cancel.cancelled() => {
-                return Err(SentinelError::new(ErrorCode::Timeout, "cancelled while queued").with_detail("cancelled", true));
-            }
+            _ = op.cancel.cancelled() => return Err(cancelled_while_queued()),
         };
         ctx.operations.mark_running(&op.id);
         let extras = Arc::new(Mutex::new(Extras::default()));
@@ -351,15 +376,47 @@ where
     }
 }
 
-/// Tools that need no SSH (inventory, capabilities). Still recorded as operations.
+/// Tools that need no SSH (inventory, capabilities, artefact reads). Still recorded as operations, and each takes a
+/// global slot, so a flood of them is bounded like any other work.
 pub async fn local_tool<T, F, Fut>(ctx: &AppContext, tool: &'static str, body: F) -> Result<ResultEnvelope<T>>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<(T, Option<String>)>>,
 {
+    local_tool_with(ctx, tool, true, body).await
+}
+
+/// For the batch tool only: it holds no slot itself, because every item takes its own and a batch holding one while its
+/// items wait for one could deadlock a small pool.
+pub async fn local_tool_unscheduled<T, F, Fut>(ctx: &AppContext, tool: &'static str, body: F) -> Result<ResultEnvelope<T>>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<(T, Option<String>)>>,
+{
+    local_tool_with(ctx, tool, false, body).await
+}
+
+async fn local_tool_with<T, F, Fut>(ctx: &AppContext, tool: &'static str, scheduled: bool, body: F) -> Result<ResultEnvelope<T>>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<(T, Option<String>)>>,
+{
     let op = ctx.operations.begin(&ctx.principal, None, tool, Effect::Read);
-    ctx.operations.mark_running(&op.id);
-    match body().await {
+    let _link = link_caller_cancel(ctx, &op.id);
+    let result = async {
+        let _slot = match scheduled {
+            true => Some(tokio::select! {
+                p = ctx.scheduler.acquire_local() => p?,
+                _ = op.cancel.cancelled() => return Err(cancelled_while_queued()),
+            }),
+            false => None,
+        };
+        ctx.operations.mark_running(&op.id);
+        // Work this tool starts (a batch's items) is cancelled with it.
+        crate::tools::cancelled_by(op.cancel.clone(), body()).await
+    }
+    .await;
+    match result {
         Ok((data, cursor)) => {
             ctx.operations.finish_ok(&op.id, None);
             let mut env = ResultEnvelope::succeeded(op.id.clone(), None, data).with_evidence(tool, EvidenceSource::Observer);

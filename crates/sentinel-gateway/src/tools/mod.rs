@@ -14,6 +14,7 @@ pub mod processes;
 pub mod services;
 pub mod transfers;
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,6 +53,21 @@ pub const TOOL_NAMES: [&str; 17] = [
 pub const GUARANTEE_STATEMENT: &str =
     "The gateway enforces the tool interface. The SSH account may permit more; it is not a remote sandbox.";
 pub const SYMLINK_CONTAINMENT: &str = "paths are resolved on the host with realpath and must stay inside the registered root; a final symlink is refused; a concurrent rename on the host between check and use is not prevented in observer mode";
+
+tokio::task_local! {
+    /// The caller's cancellation: the MCP request's token, or the enclosing batch's operation token.
+    static CALLER_CANCEL: tokio_util::sync::CancellationToken;
+}
+
+/// Runs `f` so that cancelling `token` cancels every operation `f` starts (an MCP `notifications/cancelled`, or a
+/// cancelled batch reaching its items). Without it, operations are cancelled only through `ssh_operation_cancel`.
+pub async fn cancelled_by<F: Future>(token: tokio_util::sync::CancellationToken, f: F) -> F::Output {
+    CALLER_CANCEL.scope(token, f).await
+}
+
+pub(crate) fn caller_cancel() -> Option<tokio_util::sync::CancellationToken> {
+    CALLER_CANCEL.try_with(Clone::clone).ok()
+}
 
 /// Marks remote-sourced text so agents treat it as data (spec §9.7).
 pub const UNTRUSTED: &str = "untrusted";

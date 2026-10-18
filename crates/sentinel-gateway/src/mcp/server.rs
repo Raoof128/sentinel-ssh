@@ -301,8 +301,10 @@ impl ServerHandler for SentinelServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, ErrorData> {
+        // A client's notifications/cancelled fires this token; it cancels every operation the call started.
+        let cancel = context.ct.clone();
         let tcc = ToolCallContext::new(self, request, context);
-        let mut response = self.router.call(tcc).await?;
+        let mut response = crate::tools::cancelled_by(cancel, self.router.call(tcc)).await?;
         // Failures are typed envelopes, not protocol errors; isError tells a client that reads nothing else (red team L5).
         if let CallToolResponse::Complete(result) = &mut response
             && let Some(outcome) = result
@@ -370,7 +372,9 @@ pub async fn serve_stdio(ctx: AppContext) -> anyhow::Result<()> {
             }
         })
     };
-    let running = server.serve(rmcp::transport::stdio()).await?;
+    let (stdin, stdout) = rmcp::transport::stdio();
+    let stdin = crate::mcp::limits::LineLimited::new(stdin, crate::mcp::limits::MAX_REQUEST_LINE_BYTES);
+    let running = server.serve((stdin, stdout)).await?;
     running.waiting().await?;
     sweeper.abort();
     Ok(())

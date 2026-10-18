@@ -164,7 +164,10 @@ pub async fn ssh_files_list(ctx: &AppContext, p: FilesListParams) -> Result<Resu
                 .num(1)
                 .skip_excluded()
                 .flag("-printf")
-                .arg(FIND_FORMAT);
+                .arg(FIND_FORMAT)
+                // Sorted on the host (bytes, LC_ALL=C) by the name field, so a listing cut at the output budget is the
+                // true first part of the order the cursor walks, not an arbitrary subset (red team: truncated paging).
+                .pipe(RemoteCommand::new("sort").flag("-z").flag("-t").arg("\t").flag("-k5"));
             let out = run.run_pinned(Pin::Dir, &target, Effect::Read, find).await?;
             if out.exit != ExitKind::Code(0) || has_io_error(&out.stderr) {
                 return Err(not_found_or_failure(&out.stderr));

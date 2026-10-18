@@ -231,3 +231,39 @@ fn tool_schema_snapshot() {
     assert_eq!(v.as_array().unwrap().len(), 17);
     insta::assert_json_snapshot!(v);
 }
+
+/// Red team: an endless request line must end the session, not grow a buffer until the gateway is out of memory.
+#[tokio::test]
+async fn an_overlong_request_line_ends_the_session() {
+    let mut s = spawn_server();
+    s.initialize("2026-07-28").await;
+    let stdin = s.stdin.as_mut().expect("stdin open");
+    let chunk = vec![b'a'; 64 * 1024];
+    for _ in 0..40 {
+        if stdin.write_all(&chunk).await.is_err() {
+            break; // the server already closed its end
+        }
+    }
+    let status = tokio::time::timeout(Duration::from_secs(10), s.child.wait())
+        .await
+        .expect("the server stops reading and exits")
+        .unwrap();
+    let _ = status;
+}
+
+#[test]
+fn line_limit_counts_per_line() {
+    use sentinel_gateway::mcp::limits::LineLimited;
+    use tokio::io::AsyncReadExt;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let ok: &[u8] = b"12345\n12345\n";
+        let mut r = LineLimited::new(ok, 5);
+        let mut out = Vec::new();
+        r.read_to_end(&mut out).await.unwrap();
+        assert_eq!(out, ok);
+        let mut r = LineLimited::new(&b"123456"[..], 5);
+        let e = r.read_to_end(&mut Vec::new()).await.unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+    });
+}

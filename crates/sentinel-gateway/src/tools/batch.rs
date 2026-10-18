@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
 use crate::mcp::results::Detail;
-use crate::tools::pipeline::local_tool;
+use crate::tools::pipeline::local_tool_unscheduled;
 use crate::tools::{AppContext, capabilities, disk, files, health, hosts, logs, processes, services};
 
 /// Tools a batch item may name. Control, export and batch itself are excluded.
@@ -116,14 +116,16 @@ pub async fn ssh_batch_inspect(ctx: &AppContext, p: BatchInspectParams) -> Resul
             return Err(invalid(format!("duplicate item id '{}'", it.id)));
         }
     }
-    let mut env = local_tool(ctx, "ssh_batch_inspect", || async move {
+    let mut env = local_tool_unscheduled(ctx, "ssh_batch_inspect", || async move {
         let gate = Arc::new(Semaphore::new(ITEM_CONCURRENCY));
+        // The batch's own operation token: spawned items do not inherit task-locals, so each is re-scoped to it.
+        let batch_cancel = crate::tools::caller_cancel().expect("local tools run under their operation's token");
         let mut tasks = Vec::with_capacity(p.items.len());
         for it in p.items {
-            let (ctx, gate) = (ctx.clone(), gate.clone());
+            let (ctx, gate, cancel) = (ctx.clone(), gate.clone(), batch_cancel.clone());
             tasks.push(tokio::spawn(async move {
                 let _slot = gate.acquire_owned().await.expect("semaphore never closed");
-                match dispatch(&ctx, &it.tool, it.params).await {
+                match crate::tools::cancelled_by(cancel, dispatch(&ctx, &it.tool, it.params)).await {
                     Ok(result) => BatchItemResult::Ok { id: it.id, result },
                     Err(error) => BatchItemResult::Error { id: it.id, error },
                 }

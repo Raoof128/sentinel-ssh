@@ -150,12 +150,20 @@ impl ArtifactWriter {
     }
 
     pub async fn abort(self) {
-        drop(self.file);
-        let _ = tokio::fs::remove_file(&self.part).await;
+        // Drop removes the partial file.
+        drop(self);
     }
 
     pub fn bytes_written(&self) -> u64 {
         self.bytes
+    }
+}
+
+/// A writer dropped without `finish` or `abort` (a cancelled or panicked transfer) still removes its partial bytes; after
+/// a successful publish the `.part` name no longer exists and this is a no-op.
+impl Drop for ArtifactWriter {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.part);
     }
 }
 

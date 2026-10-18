@@ -62,6 +62,8 @@ fn default_ssh_binary() -> PathBuf {
 pub struct Budgets {
     pub max_active_operations: usize,
     pub max_pending_operations: usize,
+    /// Waiters for one host at most, so a single slow host cannot fill the whole pending queue.
+    pub max_pending_per_host: usize,
     pub per_host_reads: usize,
     pub max_batch_items: usize,
     pub queue_wait_secs: u64,
@@ -83,6 +85,7 @@ impl Default for Budgets {
         Self {
             max_active_operations: 64,
             max_pending_operations: 128,
+            max_pending_per_host: 32,
             per_host_reads: 4,
             max_batch_items: 16,
             queue_wait_secs: 5,
@@ -449,9 +452,15 @@ impl Budgets {
     /// disabling a limit (spec §11.3).
     fn validate(&self) -> Result<()> {
         let b = self;
-        let checks: [(&str, u64, u64, u64); 15] = [
+        let checks: [(&str, u64, u64, u64); 16] = [
             ("max_active_operations", b.max_active_operations as u64, 1, 4096),
             ("max_pending_operations", b.max_pending_operations as u64, 1, 65536),
+            (
+                "max_pending_per_host",
+                b.max_pending_per_host as u64,
+                1,
+                b.max_pending_operations as u64,
+            ),
             ("per_host_reads", b.per_host_reads as u64, 1, 64),
             ("max_batch_items", b.max_batch_items as u64, 1, 64),
             ("queue_wait_secs", b.queue_wait_secs, 1, 300),

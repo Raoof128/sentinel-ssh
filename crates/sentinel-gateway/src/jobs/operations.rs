@@ -23,9 +23,22 @@ pub struct CancelOutcome {
     pub remote_termination: RemoteTermination,
 }
 
-#[derive(Debug, Clone, Default)]
+/// Records kept at most (red team: unbounded registry). Terminal records go first, oldest first; live ones never do,
+/// and their number is already bounded by the scheduler's active and pending caps.
+pub const MAX_OPERATIONS: usize = 4096;
+
+type Registry = HashMap<OperationId, (OperationRecord, CancellationToken)>;
+
+#[derive(Debug, Clone)]
 pub struct Operations {
-    inner: Arc<Mutex<HashMap<OperationId, (OperationRecord, CancellationToken)>>>,
+    inner: Arc<Mutex<Registry>>,
+    capacity: usize,
+}
+
+impl Default for Operations {
+    fn default() -> Self {
+        Self::with_capacity(MAX_OPERATIONS)
+    }
 }
 
 fn not_found() -> SentinelError {
@@ -35,6 +48,29 @@ fn not_found() -> SentinelError {
 impl Operations {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            capacity,
+        }
+    }
+
+    fn insert(&self, rec: OperationRecord, token: CancellationToken) {
+        let mut m = self.inner.lock().expect("operations");
+        if m.len() >= self.capacity {
+            let mut terminal: Vec<(chrono::DateTime<Utc>, OperationId)> = m
+                .values()
+                .filter(|(r, _)| r.is_terminal())
+                .map(|(r, _)| (r.finished_at.unwrap_or(r.updated_at), r.id.clone()))
+                .collect();
+            terminal.sort();
+            for (_, id) in terminal.into_iter().take(m.len() + 1 - self.capacity) {
+                m.remove(&id);
+            }
+        }
+        m.insert(rec.id.clone(), (rec, token));
     }
 
     fn with<R>(&self, id: &OperationId, f: impl FnOnce(&mut OperationRecord, &CancellationToken) -> R) -> Option<R> {
@@ -49,7 +85,7 @@ impl Operations {
         rec.transition(OperationState::Queued).expect("legal");
         let token = CancellationToken::new();
         let id = rec.id.clone();
-        self.inner.lock().expect("operations").insert(id.clone(), (rec, token.clone()));
+        self.insert(rec, token.clone());
         RunningOp { id, cancel: token }
     }
 
@@ -66,10 +102,7 @@ impl Operations {
         rec.transition(OperationState::Rejected).expect("legal");
         rec.error = Some(err.clone());
         let id = rec.id.clone();
-        self.inner
-            .lock()
-            .expect("operations")
-            .insert(id.clone(), (rec, CancellationToken::new()));
+        self.insert(rec, CancellationToken::new());
         id
     }
 

@@ -1008,6 +1008,13 @@ expression: v
               "minimum": 0,
               "type": "integer"
             },
+            "max_pending_per_host": {
+              "default": 32,
+              "description": "Waiters for one host at most, so a single slow host cannot fill the whole pending queue.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
             "max_result_bytes": {
               "default": 65536,
               "format": "uint",
