@@ -102,9 +102,8 @@ impl Operations {
                 RemoteTermination::NotApplicable
             };
             r.error = Some(err.clone());
-            if r.transition(to).is_err() {
-                let _ = r.transition(OperationState::Failed);
-            }
+            // Every non-terminal state can reach Failed; a terminal one is never overwritten.
+            let _ = r.transition(to);
         });
     }
 

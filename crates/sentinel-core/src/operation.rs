@@ -66,7 +66,7 @@ pub fn legal_transition(from: OperationState, to: OperationState) -> bool {
         (Received, Authorised | Rejected)
             | (Authorised, Queued | AwaitingApproval | Rejected)
             | (AwaitingApproval, Queued | Rejected)
-            | (Queued, Running | CancelRequested)
+            | (Queued, Running | CancelRequested | Failed)
             | (Running, Verifying | Succeeded | Failed | OutcomeUnknown | CancelRequested)
             | (Verifying, Succeeded | Failed | OutcomeUnknown)
             | (CancelRequested, Cancelled | OutcomeUnknown | Succeeded | Failed)

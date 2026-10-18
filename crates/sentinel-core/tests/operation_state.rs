@@ -61,3 +61,8 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn queued_can_fail_before_running() {
+    assert!(legal_transition(OperationState::Queued, OperationState::Failed));
+}

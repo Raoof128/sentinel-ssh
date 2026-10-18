@@ -202,3 +202,25 @@ async fn transfers_have_their_own_pool() {
     assert_eq!(reads.len(), 4, "reads are not blocked by a transfer");
     assert!(s.acquire_transfer(&h("h2")).await.is_ok());
 }
+
+/// Coverage finding: an operation refused at the queue (budget exceeded before it ran) stayed `queued` forever.
+#[test]
+fn queue_refusal_ends_the_operation_as_failed() {
+    let ops = Operations::new();
+    let me = observer();
+    let op = ops.begin(&me, Some(&h("h1")), "t", Effect::Read);
+    ops.finish_err(&op.id, &SentinelError::new(ErrorCode::BudgetExceeded, "queue full"));
+    let r = ops.get(&me, &op.id).unwrap();
+    assert_eq!(r.state, OperationState::Failed);
+    assert!(r.finished_at.is_some());
+}
+
+#[test]
+fn outcome_unknown_is_recorded_as_such() {
+    let ops = Operations::new();
+    let me = observer();
+    let op = ops.begin(&me, None, "t", Effect::Read);
+    ops.mark_running(&op.id);
+    ops.finish_err(&op.id, &SentinelError::new(ErrorCode::OutcomeUnknown, "lost"));
+    assert_eq!(ops.get(&me, &op.id).unwrap().state, OperationState::OutcomeUnknown);
+}
