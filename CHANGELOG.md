@@ -9,7 +9,7 @@ Red-team hardening of observer mode. Everything below is on `main` but is not pa
 ### Security
 
 - **Containment redesign.** File-level tools pin their targets on the host instead of checking a path and then using it. Directories are entered with `cd -P`; files are opened once on a descriptor whose real path, type and link count are checked, and only that descriptor is read. This closes symlink-swap races between check and read.
-- Hard-linked files (more than one link) are refused for reads, hashes and downloads.
+- Hard-linked files (more than one link) are refused for reads, hashes and downloads. The descriptor's path is re-checked after its link count, so unlinking an in-root hard link to a secret mid-check cannot slip past.
 - Log sources must resolve to exactly their configured path and have a single link.
 - A `read = false` root nested in a readable one is skipped by listings, refused for disk usage over its parent, and refused for stat. Unreadable roots answer as unknown roots.
 - A root or excluded root resolving to `/` can no longer fail open, and `/` cannot be registered as a root.
