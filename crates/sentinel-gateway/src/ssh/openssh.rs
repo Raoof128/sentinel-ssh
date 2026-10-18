@@ -1,0 +1,429 @@
+//! Native OpenSSH backend (spec §1, §5.3, §9.2): spawns the installed client with a fully controlled argument vector,
+//! a generated per-host known_hosts file and a cleared environment.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use async_trait::async_trait;
+use sentinel_core::error::{ErrorCode, Result, SentinelError};
+use sentinel_core::identity::HostId;
+use sentinel_core::operation::RemoteTermination;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::process::{Child, Command};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+use crate::config::{AuthConfig, GatewaySettings, HostConfig, check_private_file, ensure_private_dir};
+use crate::ssh::backend::{BackendCapabilities, ExitKind, RunBudget, RunOutcome, SshBackend, StreamBudget, StreamOutcome};
+use crate::ssh::command::RemoteCommand;
+
+/// How long to keep reading after the client exits. A ControlPersist master can inherit and hold the stderr pipe open.
+const DRAIN_GRACE: Duration = Duration::from_millis(250);
+const STDERR_CAP: usize = 16 * 1024;
+
+#[derive(Debug)]
+pub struct OpenSshBackend {
+    ssh_binary: PathBuf,
+    runtime_dir: PathBuf,
+    connect_timeout_secs: u64,
+    verified_hosts: Mutex<BTreeSet<HostId>>,
+}
+
+impl HostConfig {
+    /// The identity file path for `IdentityFile` auth.
+    pub fn auth_identity(&self) -> Option<&Path> {
+        match &self.auth {
+            AuthConfig::IdentityFile { path } => Some(path),
+            AuthConfig::Agent => None,
+        }
+    }
+}
+
+fn exit_kind(s: ExitStatus) -> ExitKind {
+    use std::os::unix::process::ExitStatusExt;
+    match (s.code(), s.signal()) {
+        (Some(c), _) => ExitKind::Code(c),
+        (None, Some(sig)) => ExitKind::Signal(sig),
+        _ => ExitKind::Killed,
+    }
+}
+
+type Shared = Arc<Mutex<(Vec<u8>, bool)>>;
+
+/// Reads to EOF, keeping at most `cap` bytes and discarding the rest so the child never blocks on a full pipe.
+fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(mut r: R, cap: usize) -> (Shared, JoinHandle<()>) {
+    let buf: Shared = Arc::new(Mutex::new((Vec::new(), false)));
+    let b2 = buf.clone();
+    let task = tokio::spawn(async move {
+        let mut chunk = vec![0u8; 8192];
+        loop {
+            match r.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let mut g = b2.lock().expect("reader buffer");
+                    let room = cap.saturating_sub(g.0.len());
+                    let take = room.min(n);
+                    g.0.extend_from_slice(&chunk[..take]);
+                    if take < n {
+                        g.1 = true;
+                    }
+                }
+            }
+        }
+    });
+    (buf, task)
+}
+
+fn take(buf: &Shared) -> (Vec<u8>, bool) {
+    std::mem::take(&mut *buf.lock().expect("reader buffer"))
+}
+
+async fn drain(tasks: Vec<JoinHandle<()>>) {
+    let aborts: Vec<_> = tasks.iter().map(|t| t.abort_handle()).collect();
+    let _ = tokio::time::timeout(DRAIN_GRACE, async {
+        for t in tasks {
+            let _ = t.await;
+        }
+    })
+    .await;
+    for a in aborts {
+        a.abort();
+    }
+}
+
+/// Kills the client's whole process group, then reaps it. The remote command is not confirmed stopped.
+async fn kill(child: &mut Child) {
+    if let Some(pid) = child.id().and_then(|p| rustix::process::Pid::from_raw(p as i32)) {
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+}
+
+fn stopped(timeout: bool, what: &str) -> SentinelError {
+    let e = if timeout {
+        SentinelError::new(ErrorCode::Timeout, format!("{what} exceeded its time budget"))
+    } else {
+        SentinelError::new(ErrorCode::Timeout, "cancelled").with_detail("cancelled", true)
+    };
+    e.with_detail("remote_termination", "unconfirmed")
+}
+
+impl OpenSshBackend {
+    pub fn new(settings: &GatewaySettings) -> Result<Self> {
+        ensure_private_dir(&settings.runtime_dir)?;
+        Ok(Self {
+            ssh_binary: settings.ssh_binary.clone(),
+            runtime_dir: settings.runtime_dir.clone(),
+            connect_timeout_secs: settings.budgets.connect_timeout_secs,
+            verified_hosts: Mutex::new(BTreeSet::new()),
+        })
+    }
+
+    pub fn known_hosts_path(&self, host: &HostConfig) -> PathBuf {
+        self.runtime_dir.join(format!("kh-{}", host.id))
+    }
+
+    /// `<host_id> <type> <base64>`; the argv sets `HostKeyAlias=<host_id>` so the address never needs to match.
+    pub fn write_known_hosts(&self, host: &HostConfig) -> Result<PathBuf> {
+        let p = self.known_hosts_path(host);
+        let tmp = self.runtime_dir.join(format!(".kh-{}.{}", host.id, std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let io = |e: std::io::Error| SentinelError::new(ErrorCode::Internal, format!("cannot write known_hosts: {e}"));
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(io)?;
+        f.write_all(format!("{} {}\n", host.id, host.host_key).as_bytes()).map_err(io)?;
+        std::fs::rename(&tmp, &p).map_err(io)?;
+        Ok(p)
+    }
+
+    fn options(&self, host: &HostConfig) -> Vec<OsString> {
+        let kh = self.known_hosts_path(host);
+        let mut o: Vec<OsString> = vec!["-F".into(), "/dev/null".into()];
+        let mut opt = |s: String| {
+            o.push("-o".into());
+            o.push(s.into());
+        };
+        opt("BatchMode=yes".into());
+        opt("StrictHostKeyChecking=yes".into());
+        opt(format!("UserKnownHostsFile={}", kh.display()));
+        opt("GlobalKnownHostsFile=/dev/null".into());
+        opt(format!("HostKeyAlias={}", host.id));
+        opt("CheckHostIP=no".into());
+        opt("UpdateHostKeys=no".into());
+        opt(format!("ConnectTimeout={}", self.connect_timeout_secs));
+        opt("ServerAliveInterval=15".into());
+        opt("ServerAliveCountMax=2".into());
+        opt("ClearAllForwardings=yes".into());
+        opt("ForwardAgent=no".into());
+        opt("ForwardX11=no".into());
+        opt("PermitLocalCommand=no".into());
+        opt("ProxyCommand=none".into());
+        opt("RequestTTY=no".into());
+        opt("ControlMaster=auto".into());
+        opt(format!("ControlPath={}/c-%C", self.runtime_dir.display()));
+        opt("ControlPersist=60".into());
+        opt("LogLevel=ERROR".into());
+        if let AuthConfig::IdentityFile { path } = &host.auth {
+            opt("IdentitiesOnly=yes".into());
+            opt("IdentityAgent=none".into());
+            o.push("-i".into());
+            o.push(path.into());
+        }
+        o.push("-p".into());
+        o.push(host.port.to_string().into());
+        o.push("-l".into());
+        o.push(host.user.clone().into());
+        o
+    }
+
+    pub fn build_argv(&self, host: &HostConfig, cmd: &RemoteCommand) -> Vec<OsString> {
+        let mut a = self.options(host);
+        a.push("--".into());
+        a.push(host.address.clone().into());
+        a.push(cmd.render().into());
+        a
+    }
+
+    fn base_command(&self, args: Vec<OsString>, host: &HostConfig) -> Command {
+        let mut c = Command::new(&self.ssh_binary);
+        c.args(args)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", &self.runtime_dir)
+            .env("LANG", "C")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .process_group(0);
+        if matches!(host.auth, AuthConfig::Agent)
+            && let Some(sock) = std::env::var_os("SSH_AUTH_SOCK")
+        {
+            c.env("SSH_AUTH_SOCK", sock);
+        }
+        c
+    }
+
+    /// `ssh -G`: the configuration the client would actually use, after the system config and our options.
+    pub fn effective_config(&self, host: &HostConfig) -> Result<BTreeMap<String, Vec<String>>> {
+        self.write_known_hosts(host)?;
+        let mut args = self.options(host);
+        args.push("-G".into());
+        args.push(host.address.clone().into());
+        let out = std::process::Command::new(&self.ssh_binary)
+            .args(args)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", &self.runtime_dir)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| SentinelError::new(ErrorCode::ConfigInvalid, format!("cannot run {}: {e}", self.ssh_binary.display())))?;
+        if !out.status.success() {
+            return Err(SentinelError::new(
+                ErrorCode::ConfigInvalid,
+                format!("ssh -G failed: {}", String::from_utf8_lossy(&out.stderr).trim()),
+            ));
+        }
+        let mut m: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Some((k, v)) = line.split_once(' ') {
+                m.entry(k.to_owned()).or_default().push(v.to_owned());
+            }
+        }
+        Ok(m)
+    }
+
+    /// Refuses to dispatch if the effective client configuration weakens host trust, forwards anything, runs a proxy or
+    /// local command, or would offer identities other than the configured one.
+    pub fn check_effective_config(&self, host: &HostConfig) -> Result<()> {
+        let eff = self.effective_config(host)?;
+        let get = |k: &str| eff.get(k).map(|v| v.join(",")).unwrap_or_default();
+        let mut bad = Vec::new();
+        let expect = [
+            ("stricthostkeychecking", "true"),
+            ("globalknownhostsfile", "/dev/null"),
+            ("forwardagent", "no"),
+            ("clearallforwardings", "yes"),
+            ("permitlocalcommand", "no"),
+            ("batchmode", "yes"),
+        ];
+        for (k, v) in expect {
+            if get(k) != v {
+                bad.push(format!("{k}={} (expected {v})", get(k)));
+            }
+        }
+        if get("userknownhostsfile") != self.known_hosts_path(host).display().to_string() {
+            bad.push(format!("userknownhostsfile={}", get("userknownhostsfile")));
+        }
+        for k in [
+            "proxycommand",
+            "proxyjump",
+            "localcommand",
+            "remoteforward",
+            "localforward",
+            "dynamicforward",
+        ] {
+            let v = get(k);
+            if !v.is_empty() && v != "none" {
+                bad.push(format!("{k}={v}"));
+            }
+        }
+        if let Some(id) = host.auth_identity() {
+            let ids = eff.get("identityfile").cloned().unwrap_or_default();
+            if ids != [id.display().to_string()] || get("identitiesonly") != "yes" {
+                bad.push(format!("identityfile={} (expected only {})", ids.join(","), id.display()));
+            }
+        }
+        if bad.is_empty() {
+            Ok(())
+        } else {
+            Err(SentinelError::new(
+                ErrorCode::ConfigInvalid,
+                format!("effective SSH configuration for host '{}' is unsafe: {}", host.id, bad.join("; ")),
+            ))
+        }
+    }
+
+    /// Checks done before every spawn. A missing identity file would make OpenSSH fall back to ~/.ssh default keys.
+    fn preflight(&self, host: &HostConfig) -> Result<()> {
+        if let Some(id) = host.auth_identity() {
+            check_private_file(id, "identity file")?;
+        }
+        let verified = self.verified_hosts.lock().expect("verified hosts").contains(&host.id);
+        if !verified {
+            self.check_effective_config(host)?;
+            self.verified_hosts.lock().expect("verified hosts").insert(host.id.clone());
+        } else {
+            self.write_known_hosts(host)?;
+        }
+        Ok(())
+    }
+
+    fn spawn(&self, host: &HostConfig, cmd: &RemoteCommand) -> Result<Child> {
+        self.preflight(host)?;
+        tracing::debug!(host = %host.id, cmd = %cmd.render(), "ssh dispatch");
+        self.base_command(self.build_argv(host, cmd), host)
+            .spawn()
+            .map_err(|e| SentinelError::new(ErrorCode::ConnectionFailed, format!("cannot start ssh client: {e}")))
+    }
+}
+
+#[async_trait]
+impl SshBackend for OpenSshBackend {
+    async fn run(&self, host: &HostConfig, cmd: &RemoteCommand, budget: &RunBudget, cancel: CancellationToken) -> Result<RunOutcome> {
+        let start = Instant::now();
+        let mut child = self.spawn(host, cmd)?;
+        let (out, t1) = spawn_reader(child.stdout.take().expect("piped stdout"), budget.max_stdout_bytes);
+        let (err, t2) = spawn_reader(child.stderr.take().expect("piped stderr"), budget.max_stderr_bytes);
+        let waited = tokio::select! {
+            s = child.wait() => Ok(s),
+            _ = tokio::time::sleep(budget.timeout) => Err(true),
+            _ = cancel.cancelled() => Err(false),
+        };
+        match waited {
+            Ok(status) => {
+                let status = status.map_err(|e| SentinelError::new(ErrorCode::Internal, format!("waiting for ssh: {e}")))?;
+                drain(vec![t1, t2]).await;
+                let (stdout, stdout_truncated) = take(&out);
+                let (stderr, stderr_truncated) = take(&err);
+                Ok(RunOutcome {
+                    exit: exit_kind(status),
+                    stdout,
+                    stdout_truncated,
+                    stderr,
+                    stderr_truncated,
+                    duration: start.elapsed(),
+                })
+            }
+            Err(timeout) => {
+                kill(&mut child).await;
+                t1.abort();
+                t2.abort();
+                Err(stopped(timeout, "remote command"))
+            }
+        }
+    }
+
+    async fn stream_stdout(
+        &self,
+        host: &HostConfig,
+        cmd: &RemoteCommand,
+        budget: &StreamBudget,
+        cancel: CancellationToken,
+        sink: &mut (dyn AsyncWrite + Send + Unpin),
+    ) -> Result<StreamOutcome> {
+        let start = Instant::now();
+        let mut child = self.spawn(host, cmd)?;
+        let mut stdout = child.stdout.take().expect("piped stdout");
+        let (err, t2) = spawn_reader(child.stderr.take().expect("piped stderr"), STDERR_CAP);
+        let total = tokio::time::sleep(budget.total_timeout);
+        tokio::pin!(total);
+        let mut bytes = 0u64;
+        let mut buf = vec![0u8; 64 * 1024];
+        let copied: Result<()> = loop {
+            tokio::select! {
+                r = tokio::time::timeout(budget.idle_timeout, stdout.read(&mut buf)) => match r {
+                    Err(_) => break Err(SentinelError::new(ErrorCode::TransferTimeoutIdle, "no data received within the idle timeout")),
+                    Ok(Err(e)) => break Err(SentinelError::new(ErrorCode::RemoteFailure, format!("reading transfer stream: {e}"))),
+                    Ok(Ok(0)) => break Ok(()),
+                    Ok(Ok(n)) => {
+                        bytes += n as u64;
+                        if bytes > budget.max_bytes {
+                            break Err(SentinelError::new(ErrorCode::BudgetExceeded, format!("stream exceeded {} bytes", budget.max_bytes)));
+                        }
+                        if let Err(e) = sink.write_all(&buf[..n]).await {
+                            let code = if e.kind() == std::io::ErrorKind::StorageFull { ErrorCode::DiskFull } else { ErrorCode::Internal };
+                            break Err(SentinelError::new(code, format!("writing transfer data: {e}")));
+                        }
+                    }
+                },
+                _ = &mut total => break Err(SentinelError::new(ErrorCode::TransferTimeoutTotal, "transfer exceeded its total time budget")),
+                _ = cancel.cancelled() => break Err(stopped(false, "transfer")),
+            }
+        };
+        if let Err(e) = copied {
+            kill(&mut child).await;
+            t2.abort();
+            return Err(e.with_detail("bytes_received", bytes));
+        }
+        let status = match tokio::time::timeout(budget.idle_timeout, child.wait()).await {
+            Ok(Ok(s)) => s,
+            _ => {
+                kill(&mut child).await;
+                t2.abort();
+                return Err(SentinelError::new(
+                    ErrorCode::TransferTimeoutIdle,
+                    "ssh did not exit after end of stream",
+                ));
+            }
+        };
+        drain(vec![t2]).await;
+        let _ = sink.flush().await;
+        Ok(StreamOutcome {
+            exit: exit_kind(status),
+            bytes,
+            stderr: take(&err).0,
+            duration: start.elapsed(),
+        })
+    }
+
+    fn capabilities(&self) -> BackendCapabilities {
+        BackendCapabilities {
+            name: "openssh".into(),
+            host_key_pinning: true,
+            remote_termination: RemoteTermination::Unconfirmed,
+            connection_reuse: true,
+        }
+    }
+}

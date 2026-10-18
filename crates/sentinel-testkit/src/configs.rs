@@ -120,3 +120,24 @@ pub fn fake_identity(dir: &Path) -> std::path::PathBuf {
     write_private(&p, "not a real key\n");
     p
 }
+
+/// Loads the minimal config through the real loader. Returns the config and the identity path.
+pub fn load_minimal(dirs: &TestDirs) -> (sentinel_gateway::config::Config, std::path::PathBuf) {
+    let identity = fake_identity(dirs.state.path());
+    let path = dirs.state.path().join("config.toml");
+    write_private(&path, &minimal_config_toml(TEST_HOST_KEY, &identity, dirs));
+    (
+        sentinel_gateway::config::load_config(&path).expect("minimal config loads"),
+        identity,
+    )
+}
+
+/// Writes an executable shell script (mode 0700) used as a stand-in `ssh_binary`. `ssh -G` (effective-config query)
+/// is passed through to the real `/usr/bin/ssh` so the backend's configuration check still runs against real OpenSSH.
+pub fn fake_ssh_script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+    let p = dir.join(name);
+    let passthrough = "case \" $* \" in *\" -G \"*) exec /usr/bin/ssh \"$@\";; esac";
+    std::fs::write(&p, format!("#!/bin/sh\n{passthrough}\n{body}\n")).expect("write script");
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).expect("chmod script");
+    p
+}
