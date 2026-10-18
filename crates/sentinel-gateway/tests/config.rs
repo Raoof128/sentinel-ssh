@@ -168,3 +168,23 @@ fn doctor_missing_config_fails() {
     assert!(r.checks.iter().any(|c| c.name == "config.load" && !c.ok));
     assert!(!r.ok());
 }
+
+#[test]
+fn private_dir_is_created_0700_and_rejects_unsafe_dirs() {
+    use sentinel_gateway::config::ensure_private_dir;
+    let d = tempfile::tempdir().unwrap();
+    let fresh = d.path().join("a/b");
+    ensure_private_dir(&fresh).unwrap();
+    assert_eq!(std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777, 0o700);
+    let open = d.path().join("open");
+    std::fs::create_dir(&open).unwrap();
+    write_with_mode(&open, 0o755);
+    assert_eq!(ensure_private_dir(&open).unwrap_err().code, ErrorCode::ConfigInvalid);
+    let link = d.path().join("link");
+    std::os::unix::fs::symlink(&fresh, &link).unwrap();
+    let e = ensure_private_dir(&link).unwrap_err();
+    assert!(e.message.contains("symlink"), "{}", e.message);
+    let file = d.path().join("file");
+    write_private(&file, "x");
+    assert_eq!(ensure_private_dir(&file).unwrap_err().code, ErrorCode::ConfigInvalid);
+}

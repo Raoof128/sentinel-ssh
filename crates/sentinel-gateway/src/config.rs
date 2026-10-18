@@ -260,6 +260,40 @@ pub fn check_private_file(path: &Path, what: &str) -> Result<()> {
     Ok(())
 }
 
+/// Creates `dir` (and parents) with mode 0700 if absent, then requires: not a symlink, a directory, owned by the current user,
+/// no group/other permission bits. Used for every gateway-private directory (artefacts, SSH runtime files).
+pub fn ensure_private_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    if std::fs::symlink_metadata(dir).is_err() {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(|e| invalid(format!("cannot create {}: {e}", dir.display())))?;
+    }
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| invalid(format!("cannot inspect {}: {e}", dir.display())))?;
+    if meta.file_type().is_symlink() {
+        return Err(invalid(format!(
+            "{} is a symlink; private directories must be real directories",
+            dir.display()
+        )));
+    }
+    if !meta.is_dir() {
+        return Err(invalid(format!("{} is not a directory", dir.display())));
+    }
+    if meta.uid() != rustix::process::getuid().as_raw() {
+        return Err(invalid(format!("{} must be owned by the current user", dir.display())));
+    }
+    if meta.mode() & 0o077 != 0 {
+        return Err(invalid(format!(
+            "{} must be mode 0700; found {:o}",
+            dir.display(),
+            meta.mode() & 0o777
+        )));
+    }
+    Ok(())
+}
+
 fn validate_abs_path(p: &str, what: &str) -> Result<()> {
     let ok = p.starts_with('/')
         && (p == "/" || !p.ends_with('/'))

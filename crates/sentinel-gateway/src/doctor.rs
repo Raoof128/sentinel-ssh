@@ -1,10 +1,10 @@
 //! `sentinel-ssh doctor` (spec §15.1): checks configuration, trust inputs and the local SSH client without any remote mutation.
 
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::config::{AuthConfig, Config, MAX_CONTROL_PATH, check_private_file, load_config};
+use crate::config::{AuthConfig, Config, MAX_CONTROL_PATH, check_private_file, ensure_private_dir, load_config};
 
 pub const SYSTEM_SSH_CONFIG: &str = "/etc/ssh/ssh_config";
 const MIN_OPENSSH: (u32, u32) = (8, 9);
@@ -131,20 +131,9 @@ fn check_ssh_binary(r: &mut DoctorReport, bin: &Path) {
 }
 
 fn check_private_dir(r: &mut DoctorReport, name: &str, dir: &Path) {
-    if !dir.exists()
-        && let Err(e) = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)
-    {
-        r.push(name, false, format!("cannot create {}: {e}", dir.display()));
-        return;
-    }
-    match std::fs::metadata(dir) {
-        Ok(m) if m.mode() & 0o077 == 0 => r.push(name, true, format!("{} (0700)", dir.display())),
-        Ok(m) => r.push(
-            name,
-            false,
-            format!("{} must be mode 0700; found {:o}", dir.display(), m.mode() & 0o777),
-        ),
-        Err(e) => r.push(name, false, format!("{}: {e}", dir.display())),
+    match ensure_private_dir(dir) {
+        Ok(()) => r.push(name, true, format!("{} (0700, owned by the current user)", dir.display())),
+        Err(e) => r.push(name, false, e.message),
     }
 }
 
