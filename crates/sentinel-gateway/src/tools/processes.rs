@@ -117,22 +117,51 @@ pub fn redact_args(args: &str) -> String {
     redact_flag_values(&s, &r.keyword_flag)
 }
 
-/// Bare words that announce a following secret. Exact match only: `tokenizer` or `auth_server.py` are not keywords.
-const BARE_KEYWORDS: [&str; 10] = [
+/// Bare words that announce a following secret (exact, case-insensitive). `tokenizer` is not one.
+const BARE_KEYWORDS: [&str; 17] = [
     "password",
     "passwd",
     "pwd",
     "pass",
     "token",
     "secret",
+    "credential",
+    "credentials",
     "apikey",
     "api_key",
     "api-key",
-    "credentials",
+    "access_key",
+    "access-key",
+    "accesskey",
+    "private_key",
+    "private-key",
+    "auth",
 ];
 
-/// Redacts the token after a credential flag or bare keyword. A following long flag (`--x`) is never taken as the value,
-/// so `--auth --password hunter2` still reaches `--password`; a single-dash value (`--password -abc`) is.
+fn env_style_keyword() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"^[A-Z0-9_]*(?:PASSWORD|PASSWD|PWD|PASS|TOKEN|SECRET|CREDENTIALS?|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|AUTH)[A-Z0-9_]*$")
+            .unwrap()
+    })
+}
+
+/// Whether `tok` announces that the next token is a secret: a credential flag (`--db-password`), an exact keyword
+/// (`password:`), or an env-style name (`DB_PASSWORD`). Paths and file names (`/etc/token.d`, `auth_server.py`) never are.
+fn is_keyword_token(tok: &str, keyword_flag: &Regex) -> bool {
+    let t = tok.trim_end_matches([':', ',', ';']);
+    if keyword_flag.is_match(t) {
+        return true;
+    }
+    if t.contains('/') || t.contains('.') {
+        return false;
+    }
+    BARE_KEYWORDS.contains(&t.to_ascii_lowercase().as_str()) || env_style_keyword().is_match(t)
+}
+
+/// Redacts the token after every keyword token, whatever it looks like (a value may start with `--`). If the redacted
+/// token was itself a keyword, the one after it is redacted too: `--auth --password x` hides both. Errs towards
+/// over-redaction.
 fn redact_flag_values(s: &str, keyword_flag: &Regex) -> String {
     let mut out = String::with_capacity(s.len());
     let mut redact_next = false;
@@ -147,13 +176,12 @@ fn redact_flag_values(s: &str, keyword_flag: &Regex) -> String {
         let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
         let tok = &rest[..end];
         rest = &rest[end..];
-        if redact_next && !tok.starts_with("--") {
-            out.push_str(if tok == REDACTED { tok } else { REDACTED });
-            redact_next = false;
-            continue;
+        if redact_next {
+            out.push_str(REDACTED);
+        } else {
+            out.push_str(tok);
         }
-        out.push_str(tok);
-        redact_next = keyword_flag.is_match(tok) || BARE_KEYWORDS.contains(&tok.to_ascii_lowercase().as_str());
+        redact_next = tok != REDACTED && is_keyword_token(tok, keyword_flag);
     }
     out
 }

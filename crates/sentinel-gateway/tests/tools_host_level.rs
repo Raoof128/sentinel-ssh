@@ -462,16 +462,20 @@ fn redaction_covers_header_schemes_dash_values_and_bare_keywords() {
     assert_eq!(redact_args("nginx -g daemon off;"), "nginx -g daemon off;");
 }
 
-/// Security review 2026-10-18 (third pass): a keyword flag must not swallow the next flag as its value, and a bare
-/// keyword must be an exact word, not any word containing one.
+/// Security review 2026-10-18 (third and fourth pass): the token after a keyword is always redacted (even a `--x` token,
+/// which could be a password), chaining when that token is itself a keyword; bare keywords include env-style names and
+/// trailing punctuation, but not paths or file names.
 #[test]
 fn redaction_does_not_let_flags_swallow_flags() {
-    assert_eq!(redact_args("app --auth --password hunter2"), "app --auth --password [REDACTED]");
+    assert_eq!(redact_args("app --auth --password hunter2"), "app --auth [REDACTED] [REDACTED]");
     assert_eq!(
         redact_args("python3 auth_server.py --token abc"),
         "python3 auth_server.py --token [REDACTED]"
     );
-    assert_eq!(redact_args("app --token --verbose"), "app --token --verbose");
+    assert_eq!(redact_args("app --password --hunter2"), "app --password [REDACTED]");
     assert_eq!(redact_args("app token abc"), "app token [REDACTED]");
     assert_eq!(redact_args("app tokenizer abc"), "app tokenizer abc");
+    assert_eq!(redact_args("env DB_PASSWORD hunter2"), "env DB_PASSWORD [REDACTED]");
+    assert_eq!(redact_args("login password: hunter2"), "login password: [REDACTED]");
+    assert_eq!(redact_args("cat /etc/token.d/readme x"), "cat /etc/token.d/readme x");
 }
