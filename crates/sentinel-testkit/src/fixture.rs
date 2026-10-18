@@ -29,7 +29,7 @@ impl SshFixture {
         })
     }
 
-    /// Host `fx`: roots app (read+export), logs (read only), secrets (no read); service api; log source api; health api_http.
+    /// Host `fx`: roots app (read+export), logs (read only, nested in app), secrets and vault (no read; vault nested in app); service api; log source api; health api_http.
     pub fn config_toml(&self, dirs: &TestDirs, host_key: &str) -> String {
         gateway_header(dirs)
             + &format!(
@@ -55,6 +55,11 @@ export = false
 
 [hosts.roots.secrets]
 path = "/srv/secrets"
+read = false
+export = false
+
+[hosts.roots.vault]
+path = "/srv/app/vault"
 read = false
 export = false
 

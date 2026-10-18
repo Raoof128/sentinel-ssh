@@ -17,8 +17,9 @@ use crate::config::HostConfig;
 use crate::jobs::operations::RunningOp;
 use crate::ssh::backend::{ExitKind, RunBudget, RunOutcome, classify_ssh_failure};
 use crate::ssh::command::{
-    EXCLUDED, EXCLUDED_EXIT, HARDLINK, HARDLINK_EXIT, KIND_MISMATCH, KIND_MISMATCH_EXIT, MISSING, MISSING_EXIT, NO_ACCESS, NO_ACCESS_EXIT,
-    Pin, ROOT_MISSING, ROOT_MISSING_EXIT, RemoteCommand, SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT, TOO_LARGE, TOO_LARGE_EXIT, contained,
+    EXCLUDED, EXCLUDED_EXIT, HARDLINK, HARDLINK_EXIT, KIND_MISMATCH, KIND_MISMATCH_EXIT, MISSING, MISSING_EXIT, NESTED_EXCLUDED,
+    NESTED_EXCLUDED_EXIT, NO_ACCESS, NO_ACCESS_EXIT, Pin, ROOT_MISSING, ROOT_MISSING_EXIT, RemoteCommand, SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT,
+    TOO_LARGE, TOO_LARGE_EXIT, contained,
 };
 use crate::tools::AppContext;
 
@@ -85,6 +86,12 @@ pub fn classify_remote(cmd: &RemoteCommand, out: &RunOutcome) -> Result<()> {
         return Err(SentinelError::new(
             ErrorCode::PolicyDenied,
             "path resolves outside the registered root (symlinked directory)",
+        ));
+    }
+    if out.exit == ExitKind::Code(NESTED_EXCLUDED_EXIT) && stderr.contains(NESTED_EXCLUDED) {
+        return Err(SentinelError::new(
+            ErrorCode::PolicyDenied,
+            "the directory contains a root this principal may not access; choose a path that does not contain it",
         ));
     }
     if out.exit == ExitKind::Code(MISSING_EXIT) && stderr.contains(MISSING) {
@@ -186,7 +193,7 @@ impl ToolRun {
     pub async fn run_pinned(&self, pin: Pin, target: &ScopedPath, effect: Effect, main: RemoteCommand) -> Result<RunOutcome> {
         let excluded = self.excluded_roots(target, effect);
         let kind = match pin {
-            Pin::Dir => Some("directory"),
+            Pin::Dir | Pin::Tree => Some("directory"),
             Pin::File => Some("regular file"),
             Pin::Entry => None,
         };

@@ -39,6 +39,8 @@ pub const HARDLINK: &str = "SENTINEL_HARDLINK";
 pub const HARDLINK_EXIT: i32 = 94;
 pub const EXCLUDED: &str = "SENTINEL_EXCLUDED";
 pub const EXCLUDED_EXIT: i32 = 93;
+pub const NESTED_EXCLUDED: &str = "SENTINEL_NESTED_EXCLUDED";
+pub const NESTED_EXCLUDED_EXIT: i32 = 90;
 pub const MISSING: &str = "SENTINEL_MISSING";
 pub const MISSING_EXIT: i32 = 91;
 pub const NO_ACCESS: &str = "SENTINEL_NO_ACCESS";
@@ -154,6 +156,12 @@ impl RemoteCommand {
         &self.programs
     }
 
+    /// Appends the `! -samefile <root>` tests a [`Pin::Dir`] prologue collected; only for a `find` expression.
+    pub fn skip_excluded(mut self) -> Self {
+        self.text.push_str(" \"$@\"");
+        self
+    }
+
     /// Reads standard input from descriptor 3, the file a [`Pin::File`] prologue opened and verified.
     pub fn stdin_fd3(mut self) -> Self {
         self.text.push_str(" <&3");
@@ -173,8 +181,13 @@ impl RemoteCommand {
 /// How a contained command reaches its target once [`contained`] has pinned it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pin {
-    /// The target directory becomes the working directory; the command names it `.`.
+    /// The target directory becomes the working directory; the command names it `.`. Excluded roots inside it are
+    /// collected as `! -samefile <root>` in the positional parameters, for a `find` built with
+    /// [`RemoteCommand::skip_excluded`] to drop (red team: nested excluded roots).
     Dir,
+    /// As [`Pin::Dir`] for commands that recurse (`du`): refused outright when an excluded root lies inside the
+    /// target, because the command cannot skip a subtree exactly.
+    Tree,
     /// The target entry itself, not followed; the command runs in its parent and names it by [`entry_name`].
     Entry,
     /// The target regular file, opened once on descriptor 3; the command reads only `<&3` or `/dev/fd/3`.
@@ -236,7 +249,7 @@ pub fn contained(root: &str, target: &str, pin: Pin, excluded: &[String], main: 
         deny(ROOT_MISSING, ROOT_MISSING_EXIT)
     ));
     let (dir, entry) = match pin {
-        Pin::Dir => (target.to_owned(), None),
+        Pin::Dir | Pin::Tree => (target.to_owned(), None),
         _ if target == root => (root.to_owned(), Some(".".to_owned())),
         _ => (
             target
@@ -248,7 +261,7 @@ pub fn contained(root: &str, target: &str, pin: Pin, excluded: &[String], main: 
             Some(entry_name(root, target)),
         ),
     };
-    if pin == Pin::Dir {
+    if matches!(pin, Pin::Dir | Pin::Tree) {
         // lstat first: refuse a final symlink and report a missing or non-directory target clearly.
         p.push_str(&format!(
             "[ \"$(stat -c %F -- {})\" = directory ] || {}; ",
@@ -263,6 +276,33 @@ pub fn contained(root: &str, target: &str, pin: Pin, excluded: &[String], main: 
         deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT)
     ));
     p.push_str(&exclusions("w", excluded));
+    match pin {
+        Pin::Dir => {
+            p.push_str("set --; ");
+            for x in excluded {
+                p.push_str(&format!(
+                    "if x=$(rp {}); then case \"$x\" in \"$w\"/*) set -- \"$@\" ! -samefile \"$x\";; esac; fi; ",
+                    shell_quote(x)
+                ));
+            }
+        }
+        Pin::Tree => {
+            for x in excluded {
+                p.push_str(&format!(
+                    "if x=$(rp {}); then case \"$x\" in \"$w\"/*) {};; esac; fi; ",
+                    shell_quote(x),
+                    deny(NESTED_EXCLUDED, NESTED_EXCLUDED_EXIT)
+                ));
+            }
+        }
+        Pin::Entry if entry.as_deref() != Some(".") => {
+            // The entry is a plain name in the resolved directory, so `$w/<name>` is its real path unless it is a
+            // symlink, which is described rather than followed. It must not be an excluded root itself.
+            p.push_str(&format!("e=\"$w\"/{}; ", shell_quote(entry.as_deref().unwrap_or("."))));
+            p.push_str(&exclusions("e", excluded));
+        }
+        _ => {}
+    }
     if pin == Pin::File {
         let e = shell_quote(entry.as_deref().unwrap_or("."));
         p.push_str(&format!(

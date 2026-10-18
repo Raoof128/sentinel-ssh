@@ -162,6 +162,7 @@ pub async fn ssh_files_list(ctx: &AppContext, p: FilesListParams) -> Result<Resu
                 .num(1)
                 .flag("-maxdepth")
                 .num(1)
+                .skip_excluded()
                 .flag("-printf")
                 .arg(FIND_FORMAT);
             let out = run.run_pinned(Pin::Dir, &target, Effect::Read, find).await?;

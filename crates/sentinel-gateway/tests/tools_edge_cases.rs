@@ -342,3 +342,65 @@ async fn unenterable_directories_are_typed_by_cause() {
             .contains("permission denied")
     );
 }
+
+#[tokio::test]
+async fn excluded_roots_are_skipped_refused_or_checked_by_pin() {
+    // Root `secrets` (read = false) is excluded for every read below.
+    let fake = FakeBackend::new();
+    let ctx = ctx_with(fake.clone());
+    let _ = ssh_files_list(
+        &ctx,
+        FilesListParams {
+            host_id: "h1".into(),
+            root: "app".into(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let _ = ssh_file_stat(
+        &ctx,
+        FileStatParams {
+            host_id: "h1".into(),
+            root: "app".into(),
+            path: "data".into(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let _ = ssh_disk_usage(
+        &ctx,
+        DiskUsageParams {
+            host_id: "h1".into(),
+            root: "app".into(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let calls = fake.calls();
+    let [list, stat, du] = &calls[..] else { panic!("{calls:?}") };
+    assert!(
+        list.contains("set --; if x=$(rp '/srv/secrets'); then case \"$x\" in \"$w\"/*) set -- \"$@\" ! -samefile \"$x\";;"),
+        "{list}"
+    );
+    assert!(list.contains("-maxdepth 1 \"$@\" -printf"), "{list}");
+    assert!(
+        stat.contains("e=\"$w\"/'data'; if x=$(rp '/srv/secrets'); then if inside \"$e\" \"$x\"; then deny SENTINEL_EXCLUDED 93"),
+        "{stat}"
+    );
+    assert!(du.contains("case \"$x\" in \"$w\"/*) deny SENTINEL_NESTED_EXCLUDED 90;;"), "{du}");
+    assert!(!du.contains("\"$@\""), "{du}");
+
+    let refused = ctx_with(FakeBackend::new().on_script(script("du", b"", b"SENTINEL_NESTED_EXCLUDED\n", 90)));
+    let e = ssh_disk_usage(
+        &refused,
+        DiskUsageParams {
+            host_id: "h1".into(),
+            root: "app".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::PolicyDenied);
+    assert!(e.message.contains("contains a root"), "{}", e.message);
+}

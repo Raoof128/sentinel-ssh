@@ -40,3 +40,5 @@ printf 'decoy content for the swap race\n' > /srv/app/data/race
 chown sentinel:sentinel '/srv/app/data/back\slash.txt' /srv/app/data/a-fifo /srv/app/data/race
 chown -R sentinel:sentinel /srv/app/utf8
 chown -h sentinel:sentinel /srv/app/nl
+# A read = false root nested inside the readable app root (red team: nested excluded roots).
+mkdir -p /srv/app/vault && printf 'VAULT-SECRET-FOR-TESTS\n' > /srv/app/vault/inner.txt && chown -R sentinel:sentinel /srv/app/vault
