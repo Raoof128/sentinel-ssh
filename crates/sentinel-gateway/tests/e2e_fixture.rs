@@ -217,9 +217,59 @@ async fn e2e_scope_and_export_enforcement() {
         ssh_file_read(c, read("app", "escape")).await.unwrap_err().code,
         ErrorCode::PolicyDenied
     );
-    // OBSERVER LIMIT (plan Task 15 Step 2): a regular file reached through a symlinked parent passes the final-component
-    // guard. Stated in ssh_capabilities_get (symlink_containment) and README; the Stage 2 broker closes it with openat2.
-    assert!(ssh_file_read(c, read("app", "escape/hostname")).await.is_ok());
+    // Final review #3: a regular file reached through a symlinked parent (escape -> /etc) is outside the root.
+    for (name, code) in [
+        (
+            "file_read",
+            ssh_file_read(c, read("app", "escape/hostname")).await.map(|_| ()).unwrap_err().code,
+        ),
+        (
+            "download",
+            ssh_transfer_download(c, dl("app", "escape/hostname"))
+                .await
+                .map(|_| ())
+                .unwrap_err()
+                .code,
+        ),
+        (
+            "files_list",
+            ssh_files_list(c, list("app", "escape/apt")).await.map(|_| ()).unwrap_err().code,
+        ),
+        (
+            "file_stat",
+            ssh_file_stat(
+                c,
+                FileStatParams {
+                    host_id: "fx".into(),
+                    root: "app".into(),
+                    path: "escape/passwd".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(|_| ())
+            .unwrap_err()
+            .code,
+        ),
+        (
+            "file_hash",
+            ssh_file_hash(
+                c,
+                FileHashParams {
+                    host_id: "fx".into(),
+                    root: "app".into(),
+                    path: "escape/hostname".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(|_| ())
+            .unwrap_err()
+            .code,
+        ),
+    ] {
+        assert_eq!(code, ErrorCode::PolicyDenied, "{name}");
+    }
     assert_eq!(
         ssh_transfer_download(c, dl("logs", "api.log")).await.unwrap_err().code,
         ErrorCode::PolicyDenied

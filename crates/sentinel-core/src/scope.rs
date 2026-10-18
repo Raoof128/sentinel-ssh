@@ -9,6 +9,8 @@ use crate::policy::RootPolicy;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopedPath {
     pub root_alias: String,
+    /// The registered root's absolute path.
+    pub root_path: String,
     /// Empty for the root itself.
     pub relative: String,
     pub absolute: String,
@@ -46,6 +48,7 @@ pub fn resolve_scoped(root: &RootPolicy, relative: &str) -> Result<ScopedPath> {
     };
     Ok(ScopedPath {
         root_alias: root.alias.clone(),
+        root_path: root.path.clone(),
         relative: trimmed.to_owned(),
         absolute,
     })

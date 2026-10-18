@@ -114,7 +114,7 @@ pub async fn ssh_disk_usage(ctx: &AppContext, p: DiskUsageParams) -> Result<Resu
                         .pipe(RemoteCommand::new("sort").flag("-rn"))
                         .pipe(RemoteCommand::new("head").flag("-n").num(max_entries as u64 + 2)),
                 );
-            let out = run.run_guarded("directory", &target.absolute, cmd).await?;
+            let out = run.run_guarded(Some("directory"), &target, cmd).await?;
             if String::from_utf8_lossy(&out.stderr).contains("Permission denied") {
                 run.warn("partial_permission_denied");
             }

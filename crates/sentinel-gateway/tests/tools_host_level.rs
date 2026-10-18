@@ -368,7 +368,7 @@ async fn capabilities_state_weaker_guarantee() {
         .unwrap();
     assert!(!e.data.guarantees.remote_enforcement);
     assert!(e.data.guarantees.statement.contains("not a remote sandbox"));
-    assert!(e.data.guarantees.symlink_containment.contains("final path component"));
+    assert!(e.data.guarantees.symlink_containment.contains("realpath"));
     assert_eq!(e.data.tools.len(), 17);
     assert_eq!(e.data.protocol_versions, ["2026-07-28", "2025-11-25"]);
     assert_eq!(e.data.mode, "observer");

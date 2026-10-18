@@ -33,6 +33,11 @@ pub const MARKER: &str = "--SENTINEL--";
 /// `kind_guard` refusal: stderr token and exit status.
 pub const KIND_MISMATCH: &str = "SENTINEL_KIND_MISMATCH";
 pub const KIND_MISMATCH_EXIT: i32 = 97;
+/// `scope_guard` refusals: the target's parent resolves outside the root, or the root itself is missing.
+pub const SCOPE_ESCAPE: &str = "SENTINEL_SCOPE_ESCAPE";
+pub const SCOPE_ESCAPE_EXIT: i32 = 96;
+pub const ROOT_MISSING: &str = "SENTINEL_ROOT_MISSING";
+pub const ROOT_MISSING_EXIT: i32 = 95;
 /// `size_guard` refusal: stderr token and exit status.
 pub const TOO_LARGE: &str = "SENTINEL_TOO_LARGE";
 pub const TOO_LARGE_EXIT: i32 = 98;
@@ -132,6 +137,36 @@ pub fn kind_guard(expected: &'static str, absolute_path: &str, main: RemoteComma
         main,
         &format!(";; *) echo {KIND_MISMATCH} >&2; exit {KIND_MISMATCH_EXIT};; esac"),
     )
+}
+
+/// Containment for root-scoped paths (spec §7.1 #8-10, §9.4). Resolves the root and the target's parent directory with
+/// `realpath -e` on the host and runs the rest only if the parent is the root or inside it, so a symlinked parent
+/// directory cannot lead outside. The final component is then checked with [`kind_guard`] when `expected` is given
+/// (a final symlink is refused there). Check and use are separate commands: a concurrent rename on the host can still
+/// race them, which only the Stage 2 broker's descriptor-relative opens close.
+pub fn scope_guard(root: &str, target: &str, expected: Option<&'static str>, main: RemoteCommand) -> RemoteCommand {
+    let inner = match expected {
+        Some(kind) => kind_guard(kind, target, main),
+        None => main,
+    };
+    let mut prefix = format!(
+        "r=$(realpath -e -- {}) || {{ echo {ROOT_MISSING} >&2; exit {ROOT_MISSING_EXIT}; }}; ",
+        shell_quote(root)
+    );
+    if target != root {
+        let parent = target.rsplit_once('/').map(|(p, _)| p).filter(|p| !p.is_empty()).unwrap_or("/");
+        prefix.push_str(&format!(
+            "p=$(realpath -e -- {}) || {{ echo {KIND_MISMATCH} >&2; exit {KIND_MISMATCH_EXIT}; }}; \
+             case \"$p/\" in \"$r\"/*) ;; *) echo {SCOPE_ESCAPE} >&2; exit {SCOPE_ESCAPE_EXIT};; esac; ",
+            shell_quote(parent)
+        ));
+    }
+    let mut programs = vec!["realpath"];
+    programs.extend(inner.programs);
+    RemoteCommand {
+        text: format!("{prefix}{}", inner.text),
+        programs,
+    }
 }
 
 /// Runs `main` only if the file is at most `max_bytes`. Otherwise prints [`TOO_LARGE`] and exits [`TOO_LARGE_EXIT`].

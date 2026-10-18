@@ -153,7 +153,7 @@ pub async fn ssh_files_list(ctx: &AppContext, p: FilesListParams) -> Result<Resu
                 .num(1)
                 .flag("-printf")
                 .arg(FIND_FORMAT);
-            let out = run.run_guarded("directory", &target.absolute, find).await?;
+            let out = run.run_guarded(Some("directory"), &target, find).await?;
             let mut all = parse_find(&run, &out.stdout);
             all.sort_by(|a, b| a.0.cmp(&b.0));
             let after: Vec<_> = all
@@ -238,7 +238,7 @@ pub async fn ssh_file_read(ctx: &AppContext, p: FileReadParams) -> Result<Result
                         .arg(&target.absolute)
                         .pipe(RemoteCommand::new("head").flag("-c").num(length as u64)),
                 );
-            let out = run.run_guarded("regular file", &target.absolute, main).await?;
+            let out = run.run_guarded(Some("regular file"), &target, main).await?;
             let (size, body) = split_header(&out.stdout)?;
             let total_bytes = parse_size(&size)?;
             let encoding = p.encoding.unwrap_or_default();
@@ -289,15 +289,13 @@ pub async fn ssh_file_stat(ctx: &AppContext, p: FileStatParams) -> Result<Result
         Effect::Read,
         |run| async move {
             let target = scoped(&run, &p.root, &p.path)?;
-            let out = run
-                .run(
-                    &RemoteCommand::new("stat")
-                        .flag("-c")
-                        .arg("%F|%s|%a|%U|%G|%Y|%h")
-                        .flag("--")
-                        .arg(&target.absolute),
-                )
-                .await?;
+            // Contained but not type-guarded: stat reports a final symlink as a symlink without following it.
+            let stat_cmd = RemoteCommand::new("stat")
+                .flag("-c")
+                .arg("%F|%s|%a|%U|%G|%Y|%h")
+                .flag("--")
+                .arg(&target.absolute);
+            let out = run.run_guarded(None, &target, stat_cmd).await?;
             if out.exit != crate::ssh::backend::ExitKind::Code(0) {
                 return Err(not_found_or_failure(&out.stderr));
             }
@@ -403,7 +401,7 @@ pub async fn ssh_file_hash(ctx: &AppContext, p: FileHashParams) -> Result<Result
             let target = scoped(&run, &p.root, &p.path)?;
             let max = run.ctx.config.gateway.budgets.max_transfer_bytes;
             let out = run
-                .run_guarded("regular file", &target.absolute, hash_command(&target.absolute, max))
+                .run_guarded(Some("regular file"), &target, hash_command(&target.absolute, max))
                 .await?;
             let (bytes, digest) = parse_hash(&out.stdout)?;
             Ok(FileHashData {

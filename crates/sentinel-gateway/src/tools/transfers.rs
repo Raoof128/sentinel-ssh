@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::artifacts::{ArtifactOrigin, ContentKind};
 use crate::mcp::results::Detail;
 use crate::ssh::backend::{ExitKind, StreamBudget, classify_ssh_failure};
-use crate::ssh::command::{RemoteCommand, kind_guard};
+use crate::ssh::command::{RemoteCommand, scope_guard};
 use crate::tools::files::{hash_command, parse_hash, scoped};
 use crate::tools::pipeline::read_tool;
 use crate::tools::{AppContext, UNTRUSTED};
@@ -75,11 +75,7 @@ pub async fn ssh_transfer_download(ctx: &AppContext, p: TransferDownloadParams) 
             let target = scoped(&run, &p.root, &p.path)?;
             let b = &run.ctx.config.gateway.budgets;
             let out = run
-                .run_guarded(
-                    "regular file",
-                    &target.absolute,
-                    hash_command(&target.absolute, b.max_transfer_bytes),
-                )
+                .run_guarded(Some("regular file"), &target, hash_command(&target.absolute, b.max_transfer_bytes))
                 .await?;
             let (size, remote_digest) = parse_hash(&out.stdout)?;
             if let Some(exp) = &p.expected_sha256
@@ -102,9 +98,10 @@ pub async fn ssh_transfer_download(ctx: &AppContext, p: TransferDownloadParams) 
                 max_bytes: size,
             };
             // Guarded again: the path could have been swapped for a symlink after hashing.
-            let cat = kind_guard(
-                "regular file",
+            let cat = scope_guard(
+                &target.root_path,
                 &target.absolute,
+                Some("regular file"),
                 RemoteCommand::new("cat").flag("--").arg(&target.absolute),
             );
             let streamed = run

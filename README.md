@@ -15,14 +15,15 @@ What v0.1 does enforce, and tests:
 - Host keys are pinned per host. An unknown or changed key stops dispatch (`HOST_KEY_CHANGED`, retry `never`).
 - The SSH client runs with `-F /dev/null` and an explicit option set: no agent, X11 or port forwarding, no proxy or local commands, no TTY. Before the first dispatch to each host, `ssh -G` confirms the effective configuration. If the configured identity file is missing the gateway refuses, because OpenSSH would otherwise fall back to your default `~/.ssh` keys.
 - Every call is checked against deny-by-default policy before anything reaches the host. Exports (downloads) need `export = true` on the root.
-- `..`, absolute paths, empty components and control characters are rejected. A target that is a symlink or special file is refused by a remote type guard.
+- `..`, absolute paths, empty components and control characters are rejected. On the host, the root and the target's parent directory are resolved with `realpath`, and the call is refused unless the target stays inside the registered root, so a symlinked directory cannot lead outside it. A target that is itself a symlink or special file is refused by a remote type guard.
 - Results are bounded (8 KiB by default, 64 KiB with `detail: "full"`). Larger results move to a private artefact.
 - Remote text is labelled `content_trust: "untrusted"`. Control and bidirectional characters are escaped, and best-effort redaction removes credentials from process arguments.
 
 What v0.1 does **not** do:
 
 - **No remote enforcement.** Anyone holding the observer account's key can run anything that account may run. Use a dedicated, low-privilege account. The Stage 2 broker adds host-side enforcement.
-- **Symlink containment covers the final path component only.** A regular file reached through a symlinked parent directory is not detected in observer mode.
+- **Check and use are separate commands.** Containment is checked on the host immediately before the read, but a concurrent rename on the host between the two can still race them. The Stage 2 broker closes this with descriptor-relative opens.
+- **Roots should be real directories.** A root whose own path is a symlink resolves for containment, but listing the root itself is refused as "not a directory".
 - **Cancellation is not confirmed remotely.** Cancelling signals the local `ssh` process; `remote_termination` stays `unconfirmed`.
 - **No changes.** Plan, approve, apply and upload come in v0.2. Every `Change`, `Stage` and `Plan` effect is denied.
 - **ControlMaster.** The client keeps an authenticated connection open for 60 s after the last call. The socket lives in the gateway's private runtime directory and its name is a digest of the host's trust identity (host id, address, user, pinned key, credential).

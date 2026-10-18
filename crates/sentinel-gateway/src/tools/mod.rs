@@ -51,7 +51,7 @@ pub const TOOL_NAMES: [&str; 17] = [
 /// The observer-mode guarantee, stated verbatim in capabilities, server instructions and README (spec §5.1, §5.5).
 pub const GUARANTEE_STATEMENT: &str =
     "The gateway enforces the tool interface. The SSH account may permit more; it is not a remote sandbox.";
-pub const SYMLINK_CONTAINMENT: &str = "final path component only; symlinked parent directories are not detected in observer mode";
+pub const SYMLINK_CONTAINMENT: &str = "paths are resolved on the host with realpath and must stay inside the registered root; a final symlink is refused; a concurrent rename on the host between check and use is not prevented in observer mode";
 
 /// Marks remote-sourced text so agents treat it as data (spec §9.7).
 pub const UNTRUSTED: &str = "untrusted";

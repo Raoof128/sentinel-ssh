@@ -340,3 +340,61 @@ async fn logs_search_rejects_bad_patterns_and_unknown_sources() {
     );
     assert!(fake.calls().is_empty());
 }
+
+/// Final review #3: a path through a symlinked parent (escape -> /etc) must not leave the root. Every root-scoped tool
+/// resolves the root and the target's parent with realpath before acting.
+#[tokio::test]
+async fn scope_escape_through_parent_symlink_is_denied() {
+    let fake = FakeBackend::new().on_script(script("realpath", b"", b"SENTINEL_SCOPE_ESCAPE\n", 96));
+    let ctx = ctx_with(fake.clone());
+    let e = ssh_file_read(&ctx, read("h1", "app", "escape/passwd", None, None, None))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::PolicyDenied);
+    assert!(e.message.contains("outside the registered root"), "{}", e.message);
+    let c = &fake.calls()[0];
+    assert!(c.starts_with("r=$(realpath -e -- '/srv/app') || "), "{c}");
+    assert!(c.contains("p=$(realpath -e -- '/srv/app/escape') || "), "{c}");
+    assert!(c.contains("case \"$p/\" in \"$r\"/*) ;;"), "{c}");
+    for (name, res) in [
+        ("files_list", ssh_files_list(&ctx, list("h1", "app", "escape/x")).await.map(|_| ())),
+        (
+            "file_stat",
+            ssh_file_stat(&ctx, stat("h1", "app", "escape/passwd")).await.map(|_| ()),
+        ),
+        (
+            "file_hash",
+            ssh_file_hash(&ctx, hash("h1", "app", "escape/passwd")).await.map(|_| ()),
+        ),
+    ] {
+        assert_eq!(res.unwrap_err().code, ErrorCode::PolicyDenied, "{name}");
+    }
+    assert!(
+        fake.calls().iter().all(|c| c.starts_with("r=$(realpath -e -- '/srv/app')")),
+        "{:?}",
+        fake.calls()
+    );
+}
+
+#[tokio::test]
+async fn root_itself_needs_no_parent_check() {
+    let fake = FakeBackend::new().on("find", b"".to_vec());
+    let ctx = ctx_with(fake.clone());
+    ssh_files_list(&ctx, list("h1", "app", "")).await.unwrap();
+    let c = &fake.calls()[0];
+    assert!(c.starts_with("r=$(realpath -e -- '/srv/app') || "), "{c}");
+    assert!(!c.contains("p=$(realpath"), "{c}");
+}
+
+#[tokio::test]
+async fn missing_root_on_host_is_reported() {
+    let fake = FakeBackend::new().on_script(script(
+        "realpath",
+        b"",
+        b"realpath: /srv/app: No such file or directory\nSENTINEL_ROOT_MISSING\n",
+        95,
+    ));
+    let e = ssh_files_list(&ctx_with(fake), list("h1", "app", "")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::RemoteFailure);
+    assert!(e.message.contains("registered root does not exist"), "{}", e.message);
+}

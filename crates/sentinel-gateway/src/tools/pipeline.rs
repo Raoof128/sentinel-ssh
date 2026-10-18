@@ -11,11 +11,15 @@ use sentinel_core::envelope::{EvidenceSource, Outcome, ResultEnvelope};
 use sentinel_core::error::{ErrorCode, Result, SentinelError};
 use sentinel_core::identity::HostId;
 use sentinel_core::policy::ResourceRef;
+use sentinel_core::scope::ScopedPath;
 
 use crate::config::HostConfig;
 use crate::jobs::operations::RunningOp;
 use crate::ssh::backend::{ExitKind, RunBudget, RunOutcome, classify_ssh_failure};
-use crate::ssh::command::{KIND_MISMATCH, KIND_MISMATCH_EXIT, RemoteCommand, TOO_LARGE, TOO_LARGE_EXIT, kind_guard};
+use crate::ssh::command::{
+    KIND_MISMATCH, KIND_MISMATCH_EXIT, ROOT_MISSING, ROOT_MISSING_EXIT, RemoteCommand, SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT, TOO_LARGE,
+    TOO_LARGE_EXIT, scope_guard,
+};
 use crate::tools::AppContext;
 
 pub const NON_UTF8_WARNING: &str = "non_utf8_replaced";
@@ -69,6 +73,18 @@ pub fn classify_remote(cmd: &RemoteCommand, out: &RunOutcome) -> Result<()> {
         return Err(SentinelError::new(code, first_line(&out.stderr)));
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
+    if out.exit == ExitKind::Code(SCOPE_ESCAPE_EXIT) && stderr.contains(SCOPE_ESCAPE) {
+        return Err(SentinelError::new(
+            ErrorCode::PolicyDenied,
+            "path resolves outside the registered root (symlinked directory)",
+        ));
+    }
+    if out.exit == ExitKind::Code(ROOT_MISSING_EXIT) && stderr.contains(ROOT_MISSING) {
+        return Err(SentinelError::new(
+            ErrorCode::RemoteFailure,
+            "the registered root does not exist on the host",
+        ));
+    }
     if out.exit == ExitKind::Code(KIND_MISMATCH_EXIT) && stderr.contains(KIND_MISMATCH) {
         if stderr.contains("No such file or directory") {
             return Err(SentinelError::new(ErrorCode::NotFound, "path not found"));
@@ -124,18 +140,20 @@ impl ToolRun {
         Ok(out)
     }
 
-    /// Runs `main` behind a [`kind_guard`]; a mismatch becomes `POLICY_DENIED: target is not a <expected>`.
-    pub async fn run_guarded(&self, expected: &'static str, absolute: &str, main: RemoteCommand) -> Result<RunOutcome> {
-        self.run(&kind_guard(expected, absolute, main)).await.map_err(|e| {
-            if e.code == ErrorCode::PolicyDenied && e.message.starts_with("target has an unexpected file type") {
-                SentinelError::new(
-                    ErrorCode::PolicyDenied,
-                    format!("target is not a {expected} (symlinks and special files are refused)"),
-                )
-            } else {
-                e
-            }
-        })
+    /// Runs `main` behind a [`scope_guard`]: the target must resolve inside its root and, when `expected` is given, be
+    /// of that file type. A type mismatch becomes `POLICY_DENIED: target is not a <expected>`.
+    pub async fn run_guarded(&self, expected: Option<&'static str>, target: &ScopedPath, main: RemoteCommand) -> Result<RunOutcome> {
+        self.run(&scope_guard(&target.root_path, &target.absolute, expected, main))
+            .await
+            .map_err(|e| match expected {
+                Some(kind) if e.code == ErrorCode::PolicyDenied && e.message.starts_with("target has an unexpected file type") => {
+                    SentinelError::new(
+                        ErrorCode::PolicyDenied,
+                        format!("target is not a {kind} (symlinks and special files are refused)"),
+                    )
+                }
+                _ => e,
+            })
     }
 
     /// Lossy UTF-8; records the `non_utf8_replaced` warning once if any replacement happened.
