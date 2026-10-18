@@ -65,7 +65,7 @@ fn argv_is_fully_controlled() {
     ] {
         assert!(joined.contains(req), "{req}");
     }
-    assert_eq!(s[s.len() - 3..], ["--", "203.0.113.10", "true"]);
+    assert_eq!(s[s.len() - 3..], ["--", "203.0.113.10", "LC_ALL=C; export LC_ALL; true"]);
     insta::assert_debug_snapshot!(s);
 }
 
@@ -332,4 +332,59 @@ fn control_path_binds_trust_identity() {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     assert!(argv.contains(&format!("ControlPath={}", p0.display())));
+}
+
+/// Final review #1: concurrent spawns for one host raced on the known_hosts temp file (EEXIST / ENOENT → INTERNAL).
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn concurrent_runs_to_one_host_all_succeed() {
+    let (dirs, mut cfg) = setup();
+    with_script(&dirs, &mut cfg, "echo ok");
+    let b = std::sync::Arc::new(OpenSshBackend::new(&cfg.gateway).unwrap());
+    let h = host(&cfg);
+    let mut tasks = Vec::new();
+    for _ in 0..32 {
+        let (b, h) = (b.clone(), h.clone());
+        tasks.push(tokio::spawn(async move {
+            b.run(&h, &RemoteCommand::new("true"), &budget(10_000), CancellationToken::new())
+                .await
+        }));
+    }
+    let mut failures = Vec::new();
+    for t in tasks {
+        if let Err(e) = t.await.unwrap() {
+            failures.push(e.message);
+        }
+    }
+    assert!(failures.is_empty(), "{} of 32 failed: {:?}", failures.len(), failures.first());
+}
+
+/// Final review #8: remote output (stat %F, error text) is locale-dependent; every command runs under LC_ALL=C.
+#[test]
+fn remote_command_pins_c_locale() {
+    let (_dirs, cfg) = setup();
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let argv = b.build_argv(&host(&cfg), &RemoteCommand::new("true"));
+    assert_eq!(argv.last().unwrap().to_string_lossy(), "LC_ALL=C; export LC_ALL; true");
+}
+
+/// Final review #4: agent auth must not let OpenSSH fall back to ~/.ssh/id_* on disk.
+#[test]
+fn agent_auth_disables_default_identity_files() {
+    let (_dirs, cfg) = setup();
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let mut h = host(&cfg);
+    h.auth = sentinel_gateway::config::AuthConfig::Agent;
+    let argv: Vec<String> = b
+        .build_argv(&h, &RemoteCommand::new("true"))
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(argv.contains(&"IdentityFile=none".to_string()), "{argv:?}");
+    let eff = b.effective_config(&h).unwrap();
+    assert!(
+        eff.get("identityfile").is_none_or(|v| v.iter().all(|x| x == "none")),
+        "{:?}",
+        eff.get("identityfile")
+    );
+    b.check_effective_config(&h).unwrap();
 }

@@ -57,5 +57,5 @@ expression: s
     "sentinel-observer",
     "--",
     "203.0.113.10",
-    "true",
+    "LC_ALL=C; export LC_ALL; true",
 ]

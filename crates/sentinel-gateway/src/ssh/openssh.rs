@@ -133,7 +133,9 @@ impl OpenSshBackend {
     /// `<host_id> <type> <base64>`; the argv sets `HostKeyAlias=<host_id>` so the address never needs to match.
     pub fn write_known_hosts(&self, host: &HostConfig) -> Result<PathBuf> {
         let p = self.known_hosts_path(host);
-        let tmp = self.runtime_dir.join(format!(".kh-{}.{}", host.id, std::process::id()));
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = self.runtime_dir.join(format!(".kh-{}.{}.{n}", host.id, std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         let io = |e: std::io::Error| SentinelError::new(ErrorCode::Internal, format!("cannot write known_hosts: {e}"));
         let mut f = std::fs::OpenOptions::new()
@@ -196,11 +198,15 @@ impl OpenSshBackend {
         opt(format!("ControlPath={}", self.control_path(host).display()));
         opt("ControlPersist=60".into());
         opt("LogLevel=ERROR".into());
-        if let AuthConfig::IdentityFile { path } = &host.auth {
-            opt("IdentitiesOnly=yes".into());
-            opt("IdentityAgent=none".into());
-            o.push("-i".into());
-            o.push(path.into());
+        match &host.auth {
+            AuthConfig::IdentityFile { path } => {
+                opt("IdentitiesOnly=yes".into());
+                opt("IdentityAgent=none".into());
+                o.push("-i".into());
+                o.push(path.into());
+            }
+            // Agent keys only: without this OpenSSH also tries ~/.ssh/id_* from the passwd home (spec §4.4).
+            AuthConfig::Agent => opt("IdentityFile=none".into()),
         }
         o.push("-p".into());
         o.push(host.port.to_string().into());
@@ -213,7 +219,8 @@ impl OpenSshBackend {
         let mut a = self.options(host);
         a.push("--".into());
         a.push(host.address.clone().into());
-        a.push(cmd.render().into());
+        // GNU stat %F and every error message we classify are translated under other locales.
+        a.push(format!("LC_ALL=C; export LC_ALL; {}", cmd.render()).into());
         a
     }
 
@@ -301,10 +308,17 @@ impl OpenSshBackend {
                 bad.push(format!("{k}={v}"));
             }
         }
-        if let Some(id) = host.auth_identity() {
-            let ids = eff.get("identityfile").cloned().unwrap_or_default();
-            if ids != [id.display().to_string()] || get("identitiesonly") != "yes" {
-                bad.push(format!("identityfile={} (expected only {})", ids.join(","), id.display()));
+        let ids = eff.get("identityfile").cloned().unwrap_or_default();
+        match host.auth_identity() {
+            Some(id) => {
+                if ids != [id.display().to_string()] || get("identitiesonly") != "yes" {
+                    bad.push(format!("identityfile={} (expected only {})", ids.join(","), id.display()));
+                }
+            }
+            None => {
+                if !ids.iter().all(|x| x == "none") {
+                    bad.push(format!("identityfile={} (agent auth must not offer on-disk keys)", ids.join(",")));
+                }
             }
         }
         if bad.is_empty() {
@@ -318,16 +332,16 @@ impl OpenSshBackend {
     }
 
     /// Checks done before every spawn. A missing identity file would make OpenSSH fall back to ~/.ssh default keys.
+    /// The first call for a host writes its known_hosts and verifies the effective config while holding the lock, so
+    /// concurrent first calls neither race on the file nor skip the check.
     fn preflight(&self, host: &HostConfig) -> Result<()> {
         if let Some(id) = host.auth_identity() {
             check_private_file(id, "identity file")?;
         }
-        let verified = self.verified_hosts.lock().expect("verified hosts").contains(&host.id);
-        if !verified {
+        let mut verified = self.verified_hosts.lock().expect("verified hosts");
+        if !verified.contains(&host.id) {
             self.check_effective_config(host)?;
-            self.verified_hosts.lock().expect("verified hosts").insert(host.id.clone());
-        } else {
-            self.write_known_hosts(host)?;
+            verified.insert(host.id.clone());
         }
         Ok(())
     }
