@@ -447,3 +447,17 @@ async fn disk_usage_drops_paths_outside_root() {
     assert_eq!(e.data.entries.iter().map(|x| x.path.as_str()).collect::<Vec<_>>(), ["data"]);
     assert!(!serde_json::to_string(&e).unwrap().contains("shadow"));
 }
+
+/// Security review 2026-10-18 (second pass): header values with a scheme word, credential flag values starting with '-',
+/// and bare keywords followed by a value.
+#[test]
+fn redaction_covers_header_schemes_dash_values_and_bare_keywords() {
+    assert_eq!(
+        redact_args("curl -H Authorization: token ghp_abc"),
+        "curl -H Authorization: [REDACTED]"
+    );
+    assert_eq!(redact_args("curl -H X-Api-Key: k123"), "curl -H X-Api-Key: [REDACTED]");
+    assert_eq!(redact_args("app --password -abc"), "app --password [REDACTED]");
+    assert_eq!(redact_args("expect-login password hunter2"), "expect-login password [REDACTED]");
+    assert_eq!(redact_args("nginx -g daemon off;"), "nginx -g daemon off;");
+}

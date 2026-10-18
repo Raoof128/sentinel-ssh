@@ -75,9 +75,11 @@ fn redactors() -> &'static Redactors {
     static R: OnceLock<Redactors> = OnceLock::new();
     R.get_or_init(|| Redactors {
         bearer: Regex::new(r"(?i)\b(bearer|basic)(\s+)(\S+)").unwrap(),
-        header: Regex::new(r"(?i)\b((?:proxy-)?authorization|x-api-key|api-key)(:\s*)(\S+)").unwrap(),
+        // The scheme word and the credential both go: `Authorization: token X`.
+        header: Regex::new(r"(?i)\b((?:proxy-)?authorization|x-api-key|api-key)(:\s*)(\S+(?:\s+[^\s-]\S*)?)").unwrap(),
         assign: Regex::new(&format!(r"(?i)([^\s=:&?]*{KW}[^\s=:&?]*)(=)([^\s&]+)")).unwrap(),
-        flag_space: Regex::new(&format!(r"(?i)((?:^|\s)-{{1,2}}[\w.-]*{KW}[\w.-]*)(\s+)([^\s-]\S*)")).unwrap(),
+        // Bare keywords too, and values that start with '-' (`--password -abc`).
+        flag_space: Regex::new(&format!(r"(?i)((?:^|\s)-{{0,2}}[\w.-]*{KW}[\w.-]*)(\s+)(\S+)")).unwrap(),
         url: Regex::new(r"(://[^/\s:@]+:)[^@\s/]+@").unwrap(),
         key_like: Regex::new(r"(?i)([\w-]*key[\w-]*)(=)(\S{8,})").unwrap(),
         mysql_p: Regex::new(r"(\s-p)(\S+)").unwrap(),
