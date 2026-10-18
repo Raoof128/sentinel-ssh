@@ -287,11 +287,23 @@ pub fn check_private_file(path: &Path, what: &str) -> Result<()> {
 /// another account could swap a component out from under the gateway (red team M1).
 pub fn check_trusted_ancestors(path: &Path, what: &str) -> Result<()> {
     let me = rustix::process::getuid().as_raw();
-    for anc in path.ancestors().skip(1) {
-        if anc.as_os_str().is_empty() {
-            continue;
+    // Resolve the longest existing prefix: the chain that must be trusted is the real one, not the lexical one
+    // (a symlink could point into a directory under a world-writable parent).
+    let mut base = path.parent();
+    while let Some(b) = base {
+        if b.as_os_str().is_empty() || b.exists() {
+            break;
         }
-        let Ok(meta) = std::fs::metadata(anc) else { continue };
+        base = b.parent();
+    }
+    let Some(base) = base.filter(|b| !b.as_os_str().is_empty()) else {
+        return Ok(());
+    };
+    let real =
+        std::fs::canonicalize(base).map_err(|e| invalid(format!("{what} {}: cannot resolve {}: {e}", path.display(), base.display())))?;
+    for anc in real.ancestors() {
+        let meta =
+            std::fs::metadata(anc).map_err(|e| invalid(format!("{what} {}: cannot inspect {}: {e}", path.display(), anc.display())))?;
         let sticky = meta.mode() & 0o1000 != 0;
         if (meta.uid() != 0 && meta.uid() != me) || (meta.mode() & 0o022 != 0 && !sticky) {
             return Err(invalid(format!(
@@ -306,11 +318,12 @@ pub fn check_trusted_ancestors(path: &Path, what: &str) -> Result<()> {
 
 /// The ssh client is code that runs with the credential: it must be an absolute path to a file only root or the
 /// current user can modify, in a trusted directory chain (red team M4).
-pub fn check_trusted_executable(path: &Path) -> Result<()> {
+pub fn check_trusted_executable(path: &Path) -> Result<PathBuf> {
     if !path.is_absolute() {
         return Err(invalid(format!("ssh_binary {} must be an absolute path", path.display())));
     }
-    let meta = std::fs::metadata(path).map_err(|e| invalid(format!("cannot inspect ssh_binary {}: {e}", path.display())))?;
+    let real = std::fs::canonicalize(path).map_err(|e| invalid(format!("cannot resolve ssh_binary {}: {e}", path.display())))?;
+    let meta = std::fs::metadata(&real).map_err(|e| invalid(format!("cannot inspect ssh_binary {}: {e}", real.display())))?;
     let me = rustix::process::getuid().as_raw();
     if (meta.uid() != 0 && meta.uid() != me) || meta.mode() & 0o022 != 0 {
         return Err(invalid(format!(
@@ -318,7 +331,8 @@ pub fn check_trusted_executable(path: &Path) -> Result<()> {
             path.display()
         )));
     }
-    check_trusted_ancestors(path, "ssh_binary")
+    check_trusted_ancestors(&real, "ssh_binary")?;
+    Ok(real)
 }
 
 /// Creates `dir` (and parents) with mode 0700 if absent, then requires: not a symlink, a directory, owned by the current user,

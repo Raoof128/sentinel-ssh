@@ -148,12 +148,13 @@ fn stopped(timeout: bool, what: &str) -> SentinelError {
 impl OpenSshBackend {
     pub fn new(settings: &GatewaySettings) -> Result<Self> {
         ensure_private_dir(&settings.runtime_dir)?;
-        check_trusted_executable(&settings.ssh_binary)?;
+        // Run the resolved file that was checked, not a path that could be re-pointed afterwards.
+        let ssh_binary = check_trusted_executable(&settings.ssh_binary)?;
         let meta = std::fs::metadata(&settings.runtime_dir).map_err(|e| SentinelError::new(ErrorCode::ConfigInvalid, e.to_string()))?;
         Ok(Self {
             runtime_identity: (meta.dev(), meta.ino()),
             multiplex: true,
-            ssh_binary: settings.ssh_binary.clone(),
+            ssh_binary,
             runtime_dir: settings.runtime_dir.clone(),
             connect_timeout_secs: settings.budgets.connect_timeout_secs,
             verified_hosts: Mutex::new(BTreeSet::new()),

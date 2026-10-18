@@ -341,3 +341,25 @@ fn gateway_paths_and_addresses_are_unambiguous() {
         "invalid address",
     );
 }
+
+/// Security review: the ancestor check walked the lexical path, so a symlink into a dir under a world-writable parent
+/// passed. The resolved path's chain is what must be trusted.
+#[test]
+fn trusted_ancestors_are_checked_on_the_resolved_path() {
+    use sentinel_gateway::config::{check_trusted_executable, ensure_private_dir};
+    let d = tempfile::tempdir().unwrap();
+    let open = d.path().join("open");
+    let inner = open.join("inner");
+    std::fs::create_dir_all(&inner).unwrap();
+    write_with_mode(&open, 0o777);
+    write_with_mode(&inner, 0o755);
+    let link = d.path().join("link");
+    std::os::unix::fs::symlink(&inner, &link).unwrap();
+    let e = ensure_private_dir(&link.join("run")).unwrap_err();
+    assert!(e.message.contains("writable by other users"), "{}", e.message);
+    let bin = inner.join("ssh");
+    std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+    write_with_mode(&bin, 0o755);
+    let e = check_trusted_executable(&link.join("ssh")).unwrap_err();
+    assert!(e.message.contains("writable by other users"), "{}", e.message);
+}
