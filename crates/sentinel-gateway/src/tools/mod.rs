@@ -1,11 +1,14 @@
 //! The 17 v0.1 tools. Each is a plain async function over [`AppContext`]; `mcp::server` adapts them to rmcp.
 
+pub mod artifacts;
+pub mod batch;
 pub mod capabilities;
 pub mod disk;
 pub mod files;
 pub mod health;
 pub mod hosts;
 pub mod logs;
+pub mod operations;
 pub mod pipeline;
 pub mod processes;
 pub mod services;

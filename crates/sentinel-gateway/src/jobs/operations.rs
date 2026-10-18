@@ -116,6 +116,18 @@ impl Operations {
         }
     }
 
+    /// This principal's operations, newest first.
+    pub fn list_for(&self, principal: &Principal) -> Vec<OperationRecord> {
+        let m = self.inner.lock().expect("operations");
+        let mut v: Vec<OperationRecord> = m
+            .values()
+            .filter(|(r, _)| r.principal == principal.id)
+            .map(|(r, _)| r.clone())
+            .collect();
+        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        v
+    }
+
     /// Owner-only. Queued or Running → CancelRequested and the token fires; terminal operations are returned unchanged.
     pub fn cancel(&self, principal: &Principal, id: &OperationId) -> Result<CancelOutcome> {
         let mut m = self.inner.lock().expect("operations");
