@@ -416,7 +416,7 @@ fn redaction_catches_embedded_keywords() {
     );
     assert_eq!(
         redact_args("curl -H Authorization: Bearer abc.def"),
-        "curl -H Authorization: [REDACTED] [REDACTED]"
+        "curl -H Authorization: [REDACTED]"
     );
     assert_eq!(
         redact_args("app --aws-access-key-id=AKIA123 --github-token=ghp_x"),
