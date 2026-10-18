@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::config::{AuthConfig, Config, MAX_CONTROL_PATH, check_private_file, ensure_private_dir, load_config};
+use crate::config::{AuthConfig, CONTROL_PATH_SUFFIX, Config, MAX_CONTROL_PATH, check_private_file, ensure_private_dir, load_config};
 
 const MIN_OPENSSH: (u32, u32) = (8, 9);
 
@@ -78,7 +78,7 @@ pub fn run_doctor(config_path: &Path, connect: bool) -> DoctorReport {
                 );
             }
         }
-        let cp = cfg.gateway.runtime_dir.as_os_str().len() + 3 + 40;
+        let cp = cfg.gateway.runtime_dir.as_os_str().len() + CONTROL_PATH_SUFFIX;
         r.push(
             format!("host.{}.controlpath_length", h.id),
             cp <= MAX_CONTROL_PATH,

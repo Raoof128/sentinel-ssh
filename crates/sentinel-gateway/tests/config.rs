@@ -284,3 +284,19 @@ fn tilde_paths_expand_and_others_do_not() {
     assert_eq!(expand_tilde(Path::new("/abs/x")), PathBuf::from("/abs/x"));
     assert_eq!(expand_tilde(Path::new("~other/x")), PathBuf::from("~other/x"));
 }
+
+/// Red team M2: the runtime_dir budget accounts for ssh's 17-byte temporary socket suffix (103 usable bytes).
+#[test]
+fn runtime_dir_budget_matches_the_real_socket_limit() {
+    let f = fx();
+    let ok = format!("/tmp/{}", "d".repeat(58));
+    let too_long = format!("/tmp/{}", "d".repeat(59));
+    let current = format!("runtime_dir = \"{}\"", f.dirs.run.path().join("r").display());
+    assert_eq!(ok.len(), 63);
+    assert!(f.load(&f.minimal().replace(&current, &format!("runtime_dir = \"{ok}\""))).is_ok());
+    rejects(
+        &f,
+        &f.minimal().replace(&current, &format!("runtime_dir = \"{too_long}\"")),
+        "too long for an SSH ControlPath socket",
+    );
+}

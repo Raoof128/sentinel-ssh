@@ -27,6 +27,30 @@ use crate::ssh::command::RemoteCommand;
 const DRAIN_GRACE: Duration = Duration::from_millis(250);
 const STDERR_CAP: usize = 16 * 1024;
 
+/// Digest of everything a connection's trust rests on: host id, address, port, user, pinned key and credential. For an
+/// identity file that includes the file's content, so a key rotated at the same path never reuses a master
+/// authenticated with the old one (red team M3).
+pub fn trust_digest(host: &HostConfig) -> String {
+    use sha2::{Digest, Sha256};
+    let cred = match &host.auth {
+        AuthConfig::IdentityFile { path } => {
+            let content = std::fs::read(path).map(|b| hex::encode(Sha256::digest(b))).unwrap_or_default();
+            format!("identity_file:{}:{content}", path.display())
+        }
+        AuthConfig::Agent => "agent".to_owned(),
+    };
+    let material = [
+        host.id.as_str(),
+        &host.address,
+        &host.port.to_string(),
+        &host.user,
+        &host.host_key.to_string(),
+        &cred,
+    ]
+    .join("\0");
+    hex::encode(Sha256::digest(material.as_bytes()))
+}
+
 #[derive(Debug)]
 pub struct OpenSshBackend {
     ssh_binary: PathBuf,
@@ -123,8 +147,23 @@ impl OpenSshBackend {
         })
     }
 
+    /// Keyed by the trust identity, never the host id alone: two configs pinning different keys for the same id must
+    /// not overwrite each other's file (red team H1).
     pub fn known_hosts_path(&self, host: &HostConfig) -> PathBuf {
-        self.runtime_dir.join(format!("kh-{}", host.id))
+        self.runtime_dir.join(format!("kh-{}", &trust_digest(host)[..20]))
+    }
+
+    fn known_hosts_line(host: &HostConfig) -> String {
+        format!("{} {}\n", host.id, host.host_key)
+    }
+
+    /// Rewrites the pinned key file if anything changed it since the last spawn.
+    fn ensure_known_hosts(&self, host: &HostConfig) -> Result<()> {
+        let current = std::fs::read_to_string(self.known_hosts_path(host)).unwrap_or_default();
+        if current != Self::known_hosts_line(host) {
+            self.write_known_hosts(host)?;
+        }
+        Ok(())
     }
 
     /// `<host_id> <type> <base64>`; the argv sets `HostKeyAlias=<host_id>` so the address never needs to match.
@@ -141,31 +180,14 @@ impl OpenSshBackend {
             .mode(0o600)
             .open(&tmp)
             .map_err(io)?;
-        f.write_all(format!("{} {}\n", host.id, host.host_key).as_bytes()).map_err(io)?;
+        f.write_all(Self::known_hosts_line(host).as_bytes()).map_err(io)?;
         std::fs::rename(&tmp, &p).map_err(io)?;
         Ok(p)
     }
 
-    /// One multiplexing socket per trust identity: host id, address, port, user, pinned key and credential all feed the name,
-    /// so a changed key or identity never reuses a master authenticated under the old one (spec §9.2). 40 hex chars keeps
-    /// the path inside the ControlPath budget checked at config load.
+    /// One multiplexing socket per trust identity (spec §9.2): see [`trust_digest`].
     pub fn control_path(&self, host: &HostConfig) -> PathBuf {
-        use sha2::{Digest, Sha256};
-        let cred = match &host.auth {
-            AuthConfig::IdentityFile { path } => format!("identity_file:{}", path.display()),
-            AuthConfig::Agent => "agent".to_owned(),
-        };
-        let material = [
-            host.id.as_str(),
-            &host.address,
-            &host.port.to_string(),
-            &host.user,
-            &host.host_key.to_string(),
-            &cred,
-        ]
-        .join("\0");
-        let digest = hex::encode(Sha256::digest(material.as_bytes()));
-        self.runtime_dir.join(format!("c-{}", &digest[..40]))
+        self.runtime_dir.join(format!("c-{}", &trust_digest(host)[..20]))
     }
 
     fn options(&self, host: &HostConfig) -> Vec<OsString> {
@@ -340,7 +362,7 @@ impl OpenSshBackend {
             self.check_effective_config(host)?;
             verified.insert(host.id.clone());
         }
-        Ok(())
+        self.ensure_known_hosts(host)
     }
 
     fn spawn(&self, host: &HostConfig, cmd: &RemoteCommand) -> Result<Child> {

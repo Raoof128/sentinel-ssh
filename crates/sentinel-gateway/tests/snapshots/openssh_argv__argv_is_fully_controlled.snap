@@ -10,7 +10,7 @@ expression: s
     "-o",
     "StrictHostKeyChecking=yes",
     "-o",
-    "UserKnownHostsFile=<RUN>/r/kh-h1",
+    "UserKnownHostsFile=<RUN>/r/kh-<HASH>",
     "-o",
     "GlobalKnownHostsFile=/dev/null",
     "-o",

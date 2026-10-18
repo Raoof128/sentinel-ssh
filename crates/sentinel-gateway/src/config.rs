@@ -13,8 +13,11 @@ use sentinel_core::identity::{HostId, HostVisibility, Principal, PrincipalId, Ro
 use sentinel_core::policy::{HostPolicy, PolicyEngine, RootPolicy};
 use serde::{Deserialize, Serialize};
 
-/// Unix domain socket paths are limited to 104 bytes on macOS; keep slack for `%C` (40 hex chars).
-pub const MAX_CONTROL_PATH: usize = 100;
+/// Longest allowed ControlPath. A Unix socket path holds 103 bytes on macOS (104 with the NUL; Linux allows 107), and
+/// ssh first binds the master at ControlPath plus a 17-byte temporary suffix before renaming it.
+pub const MAX_CONTROL_PATH: usize = 103 - 17;
+/// ControlPath = runtime_dir + "/c-" + 20 hex characters.
+pub const CONTROL_PATH_SUFFIX: usize = "/c-".len() + 20;
 
 fn invalid(msg: impl Into<String>) -> SentinelError {
     SentinelError::new(ErrorCode::ConfigInvalid, msg)
@@ -347,7 +350,7 @@ pub fn load_config(path: &Path) -> Result<Config> {
     cfg.gateway.artifact_dir = expand_tilde(&cfg.gateway.artifact_dir);
     cfg.gateway.runtime_dir = expand_tilde(&cfg.gateway.runtime_dir);
     cfg.gateway.ssh_binary = expand_tilde(&cfg.gateway.ssh_binary);
-    let cp_len = cfg.gateway.runtime_dir.as_os_str().len() + "/c-".len() + 40;
+    let cp_len = cfg.gateway.runtime_dir.as_os_str().len() + CONTROL_PATH_SUFFIX;
     if cp_len > MAX_CONTROL_PATH {
         return Err(invalid(format!(
             "runtime_dir is too long for an SSH ControlPath socket ({cp_len} > {MAX_CONTROL_PATH} bytes)"

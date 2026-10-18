@@ -42,11 +42,11 @@ fn argv_is_fully_controlled() {
     let argv = b.build_argv(&host(&cfg), &RemoteCommand::new("true"));
     let run = dirs.run.path().display().to_string();
     let id = cfg.hosts[0].auth_identity().unwrap().display().to_string();
-    let hash = regex::Regex::new("c-[0-9a-f]{40}").unwrap();
+    let hash = regex::Regex::new("(c|kh)-[0-9a-f]{20}").unwrap();
     let s: Vec<String> = argv
         .iter()
         .map(|a| {
-            hash.replace_all(&a.to_string_lossy().replace(&run, "<RUN>").replace(&id, "<ID>"), "c-<HASH>")
+            hash.replace_all(&a.to_string_lossy().replace(&run, "<RUN>").replace(&id, "<ID>"), "$1-<HASH>")
                 .into_owned()
         })
         .collect();
@@ -450,4 +450,65 @@ async fn a_client_killed_by_a_signal_reports_the_signal() {
         .await
         .unwrap();
     assert_eq!(r.exit, ExitKind::Signal(15));
+}
+
+/// Red team H1: known_hosts was named by host id only, so another process with a different pin for the same id
+/// overwrote the file a running gateway trusted. The file is keyed by the full trust identity and checked before every
+/// spawn.
+#[test]
+fn known_hosts_file_is_per_trust_identity() {
+    let (_dirs, cfg) = setup();
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let a = host(&cfg);
+    let mut other = a.clone();
+    other.host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOther00".parse().unwrap();
+    assert_ne!(b.known_hosts_path(&a), b.known_hosts_path(&other));
+    let pa = b.write_known_hosts(&a).unwrap();
+    b.write_known_hosts(&other).unwrap();
+    assert!(
+        std::fs::read_to_string(&pa).unwrap().contains("AAAAC3NzaC1lZDI1NTE5AAAAIExample"),
+        "A's pin survives B's write"
+    );
+}
+
+#[tokio::test]
+async fn tampered_known_hosts_is_restored_before_each_spawn() {
+    let (dirs, mut cfg) = setup();
+    with_script(&dirs, &mut cfg, "echo ok");
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let h = host(&cfg);
+    b.run(&h, &RemoteCommand::new("true"), &budget(5000), CancellationToken::new())
+        .await
+        .unwrap();
+    let kh = b.known_hosts_path(&h);
+    std::fs::write(&kh, "fx ecdsa-sha2-nistp256 AAAAimpostor\n").unwrap();
+    b.run(&h, &RemoteCommand::new("true"), &budget(5000), CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        std::fs::read_to_string(&kh).unwrap().contains("AAAAC3NzaC1lZDI1NTE5AAAAIExample"),
+        "the pin was rewritten"
+    );
+}
+
+/// Red team M3: a warm master survived replacing the key at the same identity path.
+#[test]
+fn control_path_changes_when_the_identity_content_changes() {
+    let (_dirs, cfg) = setup();
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let h = host(&cfg);
+    let before = b.control_path(&h);
+    std::fs::write(h.auth_identity().unwrap(), "a different key\n").unwrap();
+    assert_ne!(b.control_path(&h), before);
+}
+
+/// Red team M2: ssh binds the master socket at ControlPath plus a 17-byte temporary suffix, so the real limit is
+/// shorter than the ControlPath itself. Every control path must leave that room inside the 104-byte sun_path.
+#[test]
+fn control_path_leaves_room_for_the_temporary_suffix() {
+    let (_dirs, cfg) = setup();
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let cp = b.control_path(&host(&cfg));
+    assert!(cp.as_os_str().len() + 17 < 104, "{} bytes", cp.as_os_str().len());
+    assert_eq!(cp.file_name().unwrap().len(), "c-".len() + 20);
 }
