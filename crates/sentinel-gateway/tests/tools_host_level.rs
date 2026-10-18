@@ -554,3 +554,44 @@ async fn health_check_result_never_echoes_the_url_query() {
     assert!(!json.contains("synthetic-query-value") && !json.contains("frag"), "{json}");
     assert!(json.contains("http://127.0.0.1:8080/health?<redacted>"), "{json}");
 }
+
+/// Red team M4: credential shapes the first redactor missed. All values are synthetic.
+#[test]
+fn redaction_corpus_red_team_m4() {
+    let cases = [
+        ("curl -u alice:synthpw https://h/", "curl -u [REDACTED] https://h/"),
+        ("curl --user alice:synthpw https://h/", "curl --user [REDACTED] https://h/"),
+        ("sshpass -p synthpw ssh h", "sshpass -p [REDACTED] ssh h"),
+        ("openssl enc -k synthpw -in f", "openssl enc -k [REDACTED] -in f"),
+        ("app --jwt eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl", "app --jwt [REDACTED]"),
+        ("app eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl", "app [REDACTED]"),
+        ("git clone ghp_SYNTHETIC0123 x", "git clone [REDACTED] x"),
+        ("bot xoxb-1234-SYNTHETIC", "bot [REDACTED]"),
+        (
+            "curl https://b.example/o?X-Amz-Signature=abc123&X-Amz-Credential=AK%2F",
+            "curl https://b.example/o?X-Amz-Signature=[REDACTED]&X-Amz-Credential=[REDACTED]",
+        ),
+        (
+            "curl https://q.example/x?sv=1&sig=abc123",
+            "curl https://q.example/x?sv=1&sig=[REDACTED]",
+        ),
+        ("curl -H Cookie: session=abc123 h", "curl -H Cookie: [REDACTED] h"),
+        ("curl -H X-Auth-Token: abc123 h", "curl -H X-Auth-Token: [REDACTED] h"),
+        ("curl https://:synthpw@h/x", "curl https://:[REDACTED]@h/x"),
+        ("curl https://u:p/w@d@h/x", "curl https://u:[REDACTED]@h/x"),
+        ("app db_password synthpw", "app db_password [REDACTED]"),
+        ("app --set api_token synthpw", "app --set api_token [REDACTED]"),
+    ];
+    for (input, want) in cases {
+        assert_eq!(redact_args(input), want, "{input}");
+    }
+    // Ordinary words that merely contain a keyword are left alone.
+    for keep in ["app compass north", "app --design flat", "curl -u x"] {
+        let out = redact_args(keep);
+        if keep == "curl -u x" {
+            assert_eq!(out, "curl -u [REDACTED]");
+        } else {
+            assert_eq!(out, keep);
+        }
+    }
+}

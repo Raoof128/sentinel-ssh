@@ -47,14 +47,19 @@ fn missing_utility_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         // dash `sh: 1: X: not found`, bash `bash: line 1: X: command not found`, BusyBox ash `sh: X: not found`.
-        Regex::new(r"(?m)^(?:[\w./-]*sh: )?(?:\d+: |line \d+: )?([\w.-]+): (?:not found|command not found)").unwrap()
+        // The shell prefix is required and the line must end there: a remote file name inside another tool's error
+        // message cannot pose as one (red team M3).
+        Regex::new(r"(?m)^[\w./-]*sh: (?:\d+: |line \d+: )?([\w.-]+): (?:not found|command not found)$").unwrap()
     })
 }
 
 fn unsupported_option_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"(?m)^([\w.-]+): (?:.*\b)?(?:unrecognized|invalid option|illegal option|unknown option|unrecognized option)").unwrap()
+        // GNU getopt (`unrecognized option '--x'`, `invalid option -- 'x'`), BSD (`illegal option`), find (`unknown
+        // predicate`), BusyBox (`unrecognized option: x`, find's `unrecognized: -x`), each at the start of its own line.
+        Regex::new(r"(?m)^([\w.-]+): (?:unrecognized option\b|unrecognized:|invalid option\b|illegal option\b|unknown option\b|unknown predicate\b)[^\n]*$")
+            .unwrap()
     })
 }
 
@@ -136,25 +141,28 @@ pub fn classify_remote(cmd: &RemoteCommand, out: &RunOutcome) -> Result<()> {
             "file exceeds the configured size limit",
         ));
     }
-    if let Some(c) = missing_utility_re().captures(&stderr) {
+    // Only a program this command runs can be the missing or incompatible one.
+    let ran = |name: &str| cmd.programs().contains(&name);
+    if let Some(c) = missing_utility_re().captures_iter(&stderr).find(|c| ran(&c[1])) {
         return Err(
             SentinelError::new(ErrorCode::CapabilityUnsupported, format!("remote utility missing: {}", &c[1]))
                 .with_detail("utility", c[1].to_string()),
         );
     }
-    if stderr.contains("has not been booted with systemd") {
+    let systemctl = ran("systemctl");
+    if systemctl && stderr.contains("has not been booted with systemd") {
         return Err(SentinelError::new(
             ErrorCode::CapabilityUnsupported,
             "remote host is not running systemd (systemctl unavailable)",
         ));
     }
-    if stderr.contains("Failed to connect to bus") {
+    if systemctl && stderr.contains("Failed to connect to bus") {
         return Err(SentinelError::new(
             ErrorCode::CapabilityUnsupported,
             "systemd is not reachable for this account (no system manager, or no user session for user-scope units)",
         ));
     }
-    if let Some(c) = unsupported_option_re().captures(&stderr) {
+    if let Some(c) = unsupported_option_re().captures_iter(&stderr).find(|c| ran(&c[1])) {
         return Err(SentinelError::new(
             ErrorCode::CapabilityUnsupported,
             format!("remote {} does not support the required options (GNU utilities required)", &c[1]),

@@ -158,7 +158,7 @@ sentinel_tool!(
 sentinel_tool!(
     ProcessListTool,
     "ssh_process_list",
-    "List process summaries (pid, user, CPU, memory, elapsed, command) with command-line secrets redacted; at most 200.",
+    "List process summaries (pid, user, CPU, memory, elapsed, command) with command-line secrets redacted on a best-effort basis (a filter, never a guarantee); at most 200.",
     processes::ProcessListParams,
     processes::ProcessListData,
     processes::ssh_process_list

@@ -5778,7 +5778,7 @@ expression: v
     }
   },
   {
-    "description": "List process summaries (pid, user, CPU, memory, elapsed, command) with command-line secrets redacted; at most 200.",
+    "description": "List process summaries (pid, user, CPU, memory, elapsed, command) with command-line secrets redacted on a best-effort basis (a filter, never a guarantee); at most 200.",
     "inputSchema": {
       "$defs": {
         "Detail": {

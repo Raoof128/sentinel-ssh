@@ -407,3 +407,40 @@ async fn excluded_roots_are_skipped_refused_or_checked_by_pin() {
     assert_eq!(e.code, ErrorCode::PolicyDenied);
     assert!(e.message.contains("contains a root"), "{}", e.message);
 }
+
+/// Red team M3: stderr is partly remote-controlled (file names in error messages). Capability errors are recognised
+/// only in the exact formats the shell and GNU tools print, for programs the command actually ran.
+#[tokio::test]
+async fn spoofed_capability_messages_in_stderr_are_not_trusted() {
+    let list = || FilesListParams {
+        host_id: "h1".into(),
+        root: "app".into(),
+        ..Default::default()
+    };
+    for stderr in [
+        // A file name that embeds a fake shell message on its own line.
+        b"find: './x\nsh: 1: grep: not found': Permission denied\n".as_slice(),
+        b"find: './x\ngrep: unrecognized option '--evil'\n".as_slice(),
+        b"find: 'System has not been booted with systemd as init system (PID 1). Can't operate.'\n".as_slice(),
+        b"find: './Failed to connect to bus': Permission denied\n".as_slice(),
+        b"find: './x: not found trailing'\n".as_slice(),
+    ] {
+        let ctx = ctx_with(FakeBackend::new().on_script(script("find", b"", stderr, 1)));
+        let e = ssh_files_list(&ctx, list()).await.unwrap_err();
+        assert_ne!(
+            e.code,
+            ErrorCode::CapabilityUnsupported,
+            "{}: {e:?}",
+            String::from_utf8_lossy(stderr)
+        );
+    }
+    // The genuine formats, for a program the command ran, are still recognised.
+    for stderr in [
+        b"sh: 1: find: not found\n".as_slice(),
+        b"find: unrecognized option '-printf'\n".as_slice(),
+    ] {
+        let ctx = ctx_with(FakeBackend::new().on_script(script("find", b"", stderr, 127)));
+        let e = ssh_files_list(&ctx, list()).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::CapabilityUnsupported, "{e:?}");
+    }
+}

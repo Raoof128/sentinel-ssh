@@ -61,6 +61,9 @@ const REDACTED: &str = "[REDACTED]";
 struct Redactors {
     bearer: Regex,
     header: Regex,
+    single_header: Regex,
+    signed_query: Regex,
+    shaped: Regex,
     assign: Regex,
     keyword_flag: Regex,
     url: Regex,
@@ -76,11 +79,20 @@ fn redactors() -> &'static Redactors {
     R.get_or_init(|| Redactors {
         bearer: Regex::new(r"(?i)\b(bearer|basic)(\s+)(\S+)").unwrap(),
         // The scheme word and the credential both go: `Authorization: token X`.
-        header: Regex::new(r"(?i)\b((?:proxy-)?authorization|x-api-key|api-key)(:\s*)(\S+(?:\s+[^\s-]\S*)?)").unwrap(),
+        header: Regex::new(r"(?i)\b((?:proxy-)?authorization)(:\s*)(\S+(?:\s+[^\s-]\S*)?)").unwrap(),
+        single_header: Regex::new(r"(?i)\b(x-api-key|api-key|cookie|set-cookie|x-auth-token|x-access-token)(:\s*)(\S+)").unwrap(),
+        // Signed-URL parameters (S3, GCS, Azure SAS) and OAuth codes, which carry no credential keyword.
+        signed_query: Regex::new(
+            r"(?i)([?&](?:sig|signature|x-amz-signature|x-amz-credential|x-amz-security-token|x-goog-signature|x-goog-credential|access_token|code))(=)([^&\s#]+)",
+        )
+        .unwrap(),
+        // Self-identifying credential formats, wherever they appear: JWTs, GitHub and Slack tokens.
+        shaped: Regex::new(r"\beyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]{4,}|\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}|\bxox[abposr]-[A-Za-z0-9-]{6,}").unwrap(),
         assign: Regex::new(&format!(r"(?i)([^\s=:&?]*{KW}[^\s=:&?]*)(=)([^\s&]+)")).unwrap(),
         // A whole token that is a credential-ish flag (`--db-password`, `-token`); its value is the next token.
         keyword_flag: Regex::new(&format!(r"(?i)^-{{1,2}}[\w.-]*{KW}[\w.-]*$")).unwrap(),
-        url: Regex::new(r"(://[^/\s:@]+:)[^@\s/]+@").unwrap(),
+        // Userinfo up to the token's last '@': an empty user, or a raw '/' or '@' in the password, still hides it.
+        url: Regex::new(r"(://[^/\s:@]*:)\S*@").unwrap(),
         key_like: Regex::new(r"(?i)([\w-]*key[\w-]*)(=)(\S{8,})").unwrap(),
         mysql_p: Regex::new(r"(\s-p)(\S+)").unwrap(),
     })
@@ -111,7 +123,8 @@ pub fn redact_args(args: &str) -> String {
         s = r.mysql_p.replace_all(&s, format!("${{1}}{REDACTED}")).into_owned();
     }
     s = r.url.replace_all(&s, format!("${{1}}{REDACTED}@")).into_owned();
-    for re in [&r.bearer, &r.header, &r.assign, &r.key_like] {
+    s = r.shaped.replace_all(&s, REDACTED).into_owned();
+    for re in [&r.bearer, &r.header, &r.single_header, &r.signed_query, &r.assign, &r.key_like] {
         s = re.replace_all(&s, keep_redacted).into_owned();
     }
     redact_flag_values(&s, &r.keyword_flag)
@@ -141,10 +154,21 @@ const BARE_KEYWORDS: [&str; 17] = [
 fn env_style_keyword() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"^[A-Z0-9_]*(?:PASSWORD|PASSWD|PWD|PASS|TOKEN|SECRET|CREDENTIALS?|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|AUTH)[A-Z0-9_]*$")
-            .unwrap()
+        // Upper case as environment variables are written, or lower case joined by underscores (`db_password`); a
+        // plain lower-case word that merely contains a keyword (`compass`, `author`) is not one.
+        Regex::new(
+            r"^[A-Z0-9_]*(?:PASSWORD|PASSWD|PWD|PASS|TOKEN|SECRET|CREDENTIALS?|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|AUTH)[A-Z0-9_]*$|^(?:[a-z0-9]+_)+(?:password|passwd|pwd|pass|token|secret|credentials?|api_?key|access_?key|private_?key|auth)(?:_[a-z0-9]+)*$|^(?:password|passwd|pass|token|secret|credentials?|auth)(?:_[a-z0-9]+)+$",
+        )
+        .unwrap()
     })
 }
+
+/// Flags whose value is a secret only for one program (`-p` is a port for most, a password for sshpass).
+const PROGRAM_SECRET_FLAGS: [(&str, &[&str]); 3] = [
+    ("curl", &["-u", "--user", "-U", "--proxy-user", "-E", "--cert", "--oauth2-bearer"]),
+    ("sshpass", &["-p"]),
+    ("openssl", &["-k"]),
+];
 
 /// Whether `tok` announces that the next token is a secret: a credential flag (`--db-password`), an exact keyword
 /// (`password:`), or an env-style name (`DB_PASSWORD`). Paths and file names (`/etc/token.d`, `auth_server.py`) never are.
@@ -165,6 +189,8 @@ fn is_keyword_token(tok: &str, keyword_flag: &Regex) -> bool {
 fn redact_flag_values(s: &str, keyword_flag: &Regex) -> String {
     let mut out = String::with_capacity(s.len());
     let mut redact_next = false;
+    // The most recent program word seen, so `sudo curl -u x` and `env A=1 sshpass -p x` are covered too.
+    let mut program_flags: &[&str] = &[];
     let mut rest = s;
     while !rest.is_empty() {
         let ws = rest.len() - rest.trim_start().len();
@@ -181,7 +207,11 @@ fn redact_flag_values(s: &str, keyword_flag: &Regex) -> String {
         } else {
             out.push_str(tok);
         }
-        redact_next = tok != REDACTED && is_keyword_token(tok, keyword_flag);
+        let base = tok.rsplit('/').next().unwrap_or(tok);
+        if let Some((_, flags)) = PROGRAM_SECRET_FLAGS.iter().find(|(p, _)| *p == base) {
+            program_flags = flags;
+        }
+        redact_next = tok != REDACTED && (is_keyword_token(tok, keyword_flag) || program_flags.contains(&tok));
     }
     out
 }
