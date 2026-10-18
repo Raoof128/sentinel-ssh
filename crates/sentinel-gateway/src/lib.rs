@@ -3,4 +3,5 @@
 pub mod cli;
 pub mod config;
 pub mod doctor;
+pub mod jobs;
 pub mod ssh;
