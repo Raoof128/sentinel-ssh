@@ -52,6 +52,8 @@ pub struct ArtifactRecord {
 pub struct ArtifactStore {
     dir: PathBuf,
     retention: Duration,
+    /// Per-principal byte quota over live artefacts (spec §9.3).
+    quota: u64,
 }
 
 fn io_err(what: &str, e: std::io::Error) -> SentinelError {
@@ -164,7 +166,37 @@ impl ArtifactStore {
         Ok(Self {
             dir: dir.to_path_buf(),
             retention,
+            quota: u64::MAX,
         })
+    }
+
+    pub fn with_quota(mut self, bytes: u64) -> Self {
+        self.quota = bytes;
+        self
+    }
+
+    /// Refuses unless `owner` can store `additional` more bytes within the quota. Expired artefacts do not count.
+    pub fn ensure_quota(&self, owner: &PrincipalId, additional: u64) -> Result<()> {
+        let now = Utc::now();
+        let used: u64 = std::fs::read_dir(&self.dir)
+            .map_err(|e| io_err("list", e))?
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .filter_map(|e| std::fs::read(e.path()).ok())
+            .filter_map(|b| serde_json::from_slice::<ArtifactRecord>(&b).ok())
+            .filter(|r| &r.owner == owner && r.expires_at > now)
+            .map(|r| r.bytes)
+            .sum();
+        if used.saturating_add(additional) > self.quota {
+            return Err(SentinelError::new(
+                ErrorCode::BudgetExceeded,
+                format!(
+                    "artefact quota exceeded: {used} of {} bytes in use, {additional} more requested",
+                    self.quota
+                ),
+            ));
+        }
+        Ok(())
     }
 
     pub fn dir(&self) -> &Path {
@@ -217,6 +249,7 @@ impl ArtifactStore {
     }
 
     pub async fn put_bytes(&self, owner: &PrincipalId, origin: ArtifactOrigin, kind: ContentKind, bytes: &[u8]) -> Result<ArtifactRecord> {
+        self.ensure_quota(owner, bytes.len() as u64)?;
         Self::fill(self.begin_write(owner, origin, kind)?, bytes).await
     }
 
@@ -269,6 +302,19 @@ impl ArtifactStore {
         let mut n = 0;
         for entry in std::fs::read_dir(&self.dir).map_err(|e| io_err("list", e))?.flatten() {
             let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("part") {
+                // Left by an interrupted write. A write in progress is younger than the retention period.
+                let stale = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|age| age >= self.retention);
+                if stale {
+                    let _ = std::fs::remove_file(&p);
+                }
+                continue;
+            }
             if p.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }

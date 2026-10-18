@@ -71,6 +71,8 @@ pub struct Budgets {
     pub transfer_idle_timeout_secs: u64,
     pub transfer_total_timeout_secs: u64,
     pub artifact_retention_hours: u64,
+    /// Per-principal cap on live artefact bytes (downloads and truncated results).
+    pub max_artifact_bytes: u64,
 }
 
 impl Default for Budgets {
@@ -90,6 +92,7 @@ impl Default for Budgets {
             transfer_idle_timeout_secs: 30,
             transfer_total_timeout_secs: 600,
             artifact_retention_hours: 24,
+            max_artifact_bytes: 1_073_741_824,
         }
     }
 }

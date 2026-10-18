@@ -231,7 +231,7 @@ where
     let host_id = HostId::parse(host_id)?;
     if let Err(e) = ctx.policy.evaluate(&ctx.principal, Some(&host_id), &resource, effect).into_result() {
         let id = ctx.operations.begin_rejected(&ctx.principal, Some(&host_id), tool, effect, &e);
-        return Err(e.with_operation(id.as_str()));
+        return Err(e.with_operation(id.as_str()).with_detail("host_id", host_id.as_str()));
     }
     let host = ctx
         .config
@@ -283,7 +283,7 @@ where
         }
         Err(e) => {
             ctx.operations.finish_err(&op.id, &e);
-            Err(e.with_operation(op.id.as_str()))
+            Err(e.with_operation(op.id.as_str()).with_detail("host_id", host_id.as_str()))
         }
     }
 }

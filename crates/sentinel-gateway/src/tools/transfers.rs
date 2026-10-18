@@ -81,6 +81,11 @@ pub async fn ssh_transfer_download(ctx: &AppContext, p: TransferDownloadParams) 
                 return Err(remote_failure(&out.stderr));
             }
             let (size, remote_digest) = parse_hash(&out.stdout)?;
+            // The remote size guard already refused larger files; this also covers spoofed or changed output.
+            if size > b.max_transfer_bytes {
+                return Err(SentinelError::new(ErrorCode::BudgetExceeded, "file exceeds the configured transfer size limit"));
+            }
+            run.ctx.artifacts.ensure_quota(&run.ctx.principal.id, size)?;
             if let Some(exp) = &p.expected_sha256
                 && !exp.eq_ignore_ascii_case(&remote_digest)
             {

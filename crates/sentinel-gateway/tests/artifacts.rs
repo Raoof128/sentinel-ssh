@@ -298,3 +298,35 @@ fn inline_bound_accepts_small_results_at_either_detail() {
         assert_eq!(b.data.unwrap()["a"], 1);
     }
 }
+
+/// Hardening (spec §9.3 "per-principal byte/disk quotas"): artefacts cannot grow without bound.
+#[tokio::test]
+async fn per_principal_quota_is_enforced() {
+    let d = tempfile::tempdir().unwrap();
+    let store = ArtifactStore::open(&d.path().join("art"), Duration::from_secs(3600))
+        .unwrap()
+        .with_quota(10);
+    store.put_bytes(&me().id, origin(), ContentKind::Binary, &[1; 6]).await.unwrap();
+    let e = store.put_bytes(&me().id, origin(), ContentKind::Binary, &[1; 6]).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::BudgetExceeded);
+    assert!(e.message.contains("quota"), "{}", e.message);
+    store.put_bytes(&other().id, origin(), ContentKind::Binary, &[1; 6]).await.unwrap();
+    assert_eq!(store.ensure_quota(&me().id, 4).unwrap(), ());
+    assert_eq!(store.ensure_quota(&me().id, 5).unwrap_err().code, ErrorCode::BudgetExceeded);
+}
+
+/// Hardening: partial files left by an interrupted write are swept once older than the retention period.
+#[tokio::test]
+async fn stale_partial_files_are_swept() {
+    let d = tempfile::tempdir().unwrap();
+    let store = ArtifactStore::open(&d.path().join("art"), Duration::ZERO).unwrap();
+    std::fs::write(store.dir().join("art_x.part"), b"half").unwrap();
+    std::fs::write(store.dir().join("art_x.json.part"), b"{").unwrap();
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    store.sweep_expired().unwrap();
+    assert_eq!(std::fs::read_dir(store.dir()).unwrap().count(), 0);
+    let keep = ArtifactStore::open(&d.path().join("art2"), Duration::from_secs(3600)).unwrap();
+    std::fs::write(keep.dir().join("art_y.part"), b"in progress").unwrap();
+    keep.sweep_expired().unwrap();
+    assert!(keep.dir().join("art_y.part").exists(), "a write in progress is not touched");
+}

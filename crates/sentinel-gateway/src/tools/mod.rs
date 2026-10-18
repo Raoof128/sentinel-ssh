@@ -72,7 +72,8 @@ impl AppContext {
         let artifacts = ArtifactStore::open(
             &config.gateway.artifact_dir,
             Duration::from_secs(config.gateway.budgets.artifact_retention_hours * 3600),
-        )?;
+        )?
+        .with_quota(config.gateway.budgets.max_artifact_bytes);
         Ok(Self {
             policy: Arc::new(config.policy()),
             principal: config.principal(),

@@ -82,3 +82,24 @@ async fn artifact_reads_never_spill_into_new_artifacts() {
         "no new artefact was created"
     );
 }
+
+/// Final review ruling disagreement: a failed envelope keeps the host it was about.
+#[tokio::test]
+async fn failed_envelopes_name_their_host() {
+    use sentinel_gateway::mcp::server::HostInspectTool;
+    use sentinel_gateway::tools::hosts::HostInspectParams;
+    let dirs = TestDirs::new();
+    let (cfg, _) = load_minimal(&dirs);
+    let s = SentinelServer::new(AppContext::new(cfg, Arc::new(FakeBackend::new().fail_connect(ErrorCode::ConnectionFailed))).unwrap());
+    let env = HostInspectTool::invoke(
+        &s,
+        HostInspectParams {
+            host_id: "h1".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(env.outcome, Outcome::Failed);
+    assert_eq!(env.host_id.unwrap().as_str(), "h1");
+}

@@ -210,3 +210,25 @@ async fn cancelling_a_queued_operation_never_dispatches_it() {
         let _ = b.await;
     }
 }
+
+/// A download larger than the remaining artefact quota is refused before any bytes move.
+#[tokio::test]
+async fn download_over_quota_is_refused_before_streaming() {
+    use sentinel_gateway::tools::transfers::{TransferDownloadParams, ssh_transfer_download};
+    let hash = format!("2000000000\n\n--SENTINEL--\n{}  x\n", "ab".repeat(32)).into_bytes();
+    let fake = FakeBackend::new().on("sha256sum", hash);
+    let ctx = ctx_with(fake.clone());
+    let e = ssh_transfer_download(
+        &ctx,
+        TransferDownloadParams {
+            host_id: "h1".into(),
+            root: "app".into(),
+            path: "x".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::BudgetExceeded);
+    assert_eq!(fake.calls().len(), 1, "no cat after the quota check");
+}

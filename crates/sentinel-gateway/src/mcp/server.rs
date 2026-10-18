@@ -15,7 +15,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use sentinel_core::envelope::ResultEnvelope;
 use sentinel_core::error::{ErrorCode, Result, SentinelError};
-use sentinel_core::identity::OperationId;
+use sentinel_core::identity::{HostId, OperationId};
 use serde::Serialize;
 
 use crate::mcp::results::{BoundedEnvelope, Detail, bound_envelope, bound_envelope_inline, failed_envelope};
@@ -82,7 +82,12 @@ impl SentinelServer {
                     .as_deref()
                     .and_then(|s| OperationId::parse(s).ok())
                     .unwrap_or_else(OperationId::generate);
-                Ok(failed_envelope(id, None, e))
+                let host = e
+                    .details
+                    .get("host_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(|h| HostId::parse(h).ok());
+                Ok(failed_envelope(id, host, e))
             }
         }
     }

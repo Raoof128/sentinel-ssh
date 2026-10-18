@@ -1050,6 +1050,13 @@ Describe this gateway's backend, limits, protocol versions and guarantees, inclu
           "minimum": 0,
           "type": "integer"
         },
+        "max_artifact_bytes": {
+          "default": 1073741824,
+          "description": "Per-principal cap on live artefact bytes (downloads and truncated results).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "max_batch_items": {
           "default": 16,
           "format": "uint",
