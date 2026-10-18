@@ -1,0 +1,5 @@
+/target
+/.remember
+/.superpowers
+*.env
+/crates/sentinel-testkit/docker/keys/
