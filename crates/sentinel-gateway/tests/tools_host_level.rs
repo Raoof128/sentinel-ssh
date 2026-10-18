@@ -567,7 +567,7 @@ fn redaction_corpus_red_team_m4() {
         ("app --jwt eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl", "app --jwt [REDACTED]"),
         ("app eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl", "app [REDACTED]"),
         ("git clone ghp_SYNTHETIC0123 x", "git clone [REDACTED] x"),
-        ("bot xoxb-1234-SYNTHETIC", "bot [REDACTED]"),
+        ("bot xoxb-SYNTH12", "bot [REDACTED]"),
         (
             "curl https://b.example/o?X-Amz-Signature=abc123&X-Amz-Credential=AK%2F",
             "curl https://b.example/o?X-Amz-Signature=[REDACTED]&X-Amz-Credential=[REDACTED]",
