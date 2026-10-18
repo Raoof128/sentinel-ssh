@@ -217,13 +217,15 @@ async fn a_result_that_cannot_be_spilled_keeps_its_operation_id() {
 fn failure_envelopes_stay_bounded_whatever_they_echo() {
     let err = SentinelError::new(ErrorCode::PolicyDenied, format!("unknown root '{}'", "r".repeat(100_000)))
         .with_detail("field", "p".repeat(100_000))
-        .with_detail("n", 3);
+        .with_detail("n", 3)
+        .with_detail("list", serde_json::json!(vec!["x".repeat(100); 100]));
     let env = failed_envelope::<()>(OperationId::generate(), None, err);
     let json = serde_json::to_string(&env).unwrap();
     assert!(json.len() < 4096, "{} bytes", json.len());
     let msg = &env.error.as_ref().unwrap().message;
     assert!(msg.starts_with("unknown root 'rrr") && msg.ends_with('…'), "{msg}");
     assert_eq!(env.error.as_ref().unwrap().details["n"], 3);
+    assert!(env.error.as_ref().unwrap().details["list"].as_str().unwrap().ends_with('…'));
 }
 
 #[tokio::test]

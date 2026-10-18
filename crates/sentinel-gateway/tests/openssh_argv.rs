@@ -445,6 +445,12 @@ async fn unsafe_effective_config_refuses_dispatch() {
     agent.auth = sentinel_gateway::config::AuthConfig::Agent { public_key: None };
     let e = b.check_effective_config(&agent).unwrap_err();
     assert!(e.message.contains("agent auth must not offer on-disk keys"), "{}", e.message);
+    // Pinned to one agent key, but the effective config offers others.
+    agent.auth = sentinel_gateway::config::AuthConfig::Agent {
+        public_key: Some(dirs.state.path().join("agent.pub")),
+    };
+    let e = b.check_effective_config(&agent).unwrap_err();
+    assert!(e.message.contains("expected only the agent key"), "{}", e.message);
 }
 
 #[tokio::test]

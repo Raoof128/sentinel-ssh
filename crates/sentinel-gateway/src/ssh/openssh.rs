@@ -374,10 +374,7 @@ impl OpenSshBackend {
                     bad.push(format!("identityfile={} (expected only {})", ids.join(","), id.display()));
                 }
             }
-            None if matches!(&host.auth, AuthConfig::Agent { public_key: Some(_) }) => {
-                let AuthConfig::Agent { public_key: Some(p) } = &host.auth else {
-                    unreachable!()
-                };
+            None if let AuthConfig::Agent { public_key: Some(p) } = &host.auth => {
                 if ids != [p.display().to_string()] || get("identitiesonly") != "yes" {
                     bad.push(format!(
                         "identityfile={} (expected only the agent key {})",

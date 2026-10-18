@@ -383,6 +383,11 @@ mod tests {
     }
 
     #[test]
+    fn every_marker_has_its_own_nonce() {
+        assert_ne!(Marker::default(), Marker::default());
+    }
+
+    #[test]
     fn inside_treats_the_filesystem_root_as_containing_everything() {
         assert!(inside_sh("/srv/app", "/srv/app"));
         assert!(inside_sh("/srv/app/x", "/srv/app"));

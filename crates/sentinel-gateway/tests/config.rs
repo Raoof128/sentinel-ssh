@@ -456,3 +456,54 @@ fn the_filesystem_root_cannot_be_a_registered_root() {
     let m = f.minimal();
     rejects(&f, &m.replace("path = \"/srv/app\"", "path = \"/\""), "must not be /");
 }
+
+#[test]
+fn trust_checks_need_absolute_paths() {
+    use sentinel_gateway::config::{check_trusted_ancestors, check_trusted_executable};
+    let e = check_trusted_ancestors(Path::new("relative/dir"), "private directory").unwrap_err();
+    assert!(e.message.contains("must be an absolute path"), "{}", e.message);
+    let e = check_trusted_executable(Path::new("ssh")).unwrap_err();
+    assert!(e.message.contains("must be an absolute path"), "{}", e.message);
+    // `/` has no ancestors, so there is nothing that could be swapped above it.
+    check_trusted_ancestors(Path::new("/"), "x").unwrap();
+}
+
+/// A trusted symlink (owned by the user, in a trusted directory) to an executable others can write is still refused:
+/// the binary's own permissions are judged after resolution.
+#[test]
+fn ssh_binary_whose_target_others_can_write_is_refused() {
+    use sentinel_gateway::config::check_trusted_executable;
+    let d = tempfile::tempdir().unwrap();
+    write_with_mode(d.path(), 0o755);
+    let bin = d.path().join("ssh-real");
+    std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+    write_with_mode(&bin, 0o775);
+    let link = d.path().join("ssh");
+    std::os::unix::fs::symlink(&bin, &link).unwrap();
+    let e = check_trusted_executable(&link).unwrap_err();
+    assert!(e.message.contains("writable by other users"), "{}", e.message);
+}
+
+#[test]
+fn agent_auth_with_a_pinned_public_key_loads() {
+    let f = fx();
+    let pubkey = f.dirs.state.path().join("agent.pub");
+    std::fs::write(&pubkey, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample agent\n").unwrap();
+    let m = f.minimal();
+    let line = m.lines().find(|l| l.starts_with("auth = ")).unwrap().to_owned();
+    let cfg = f
+        .load(&m.replace(
+            &line,
+            &format!("auth = {{ method = \"agent\", public_key = \"{}\" }}", pubkey.display()),
+        ))
+        .unwrap();
+    assert!(matches!(
+        &cfg.hosts[0].auth,
+        sentinel_gateway::config::AuthConfig::Agent { public_key: Some(p) } if p == &pubkey
+    ));
+    rejects(
+        &f,
+        &m.replace(&line, "auth = { method = \"agent\", public_key = \"relative.pub\" }"),
+        "agent public key",
+    );
+}

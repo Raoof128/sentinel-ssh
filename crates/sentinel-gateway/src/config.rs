@@ -296,6 +296,10 @@ pub fn is_untrusted(uid: u32, mode: u32, symlink: bool, me: u32) -> bool {
 }
 
 pub fn check_trusted_ancestors(path: &Path, what: &str) -> Result<()> {
+    // A relative path's chain depends on the working directory; there is nothing fixed to trust.
+    if !path.is_absolute() {
+        return Err(invalid(format!("{what} {} must be an absolute path", path.display())));
+    }
     let me = rustix::process::getuid().as_raw();
     // Resolve the longest existing prefix: the chain that must be trusted is the real one, not the lexical one
     // (a symlink could point into a directory under a world-writable parent).
@@ -306,7 +310,8 @@ pub fn check_trusted_ancestors(path: &Path, what: &str) -> Result<()> {
         }
         base = b.parent();
     }
-    let Some(base) = base.filter(|b| !b.as_os_str().is_empty()) else {
+    // Only `/` itself has no ancestors to check.
+    let Some(base) = base else {
         return Ok(());
     };
     let real =

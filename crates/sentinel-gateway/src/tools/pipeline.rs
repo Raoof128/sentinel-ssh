@@ -225,9 +225,8 @@ impl ToolRun {
     /// Paths of this host's roots that `effect` may not reach (red team: nested roots). A more restricted root nested
     /// inside, or reachable through, the requested root stays closed.
     fn excluded_roots(&self, target: &ScopedPath, effect: Effect) -> Vec<String> {
-        let Some(hp) = self.ctx.policy.host(&self.ctx.principal, &self.host.id) else {
-            return Vec::new();
-        };
+        // The host was authorised before the run began, so its policy exists.
+        let hp = self.ctx.policy.host(&self.ctx.principal, &self.host.id).expect("authorised host");
         hp.roots
             .values()
             .filter(|r| r.path != target.root_path)

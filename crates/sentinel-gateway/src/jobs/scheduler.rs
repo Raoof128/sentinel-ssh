@@ -57,11 +57,10 @@ struct HostPendingGuard<'a>(&'a Mutex<HashMap<HostId, usize>>, HostId);
 impl Drop for HostPendingGuard<'_> {
     fn drop(&mut self) {
         let mut m = self.0.lock().expect("per-host pending");
-        if let Some(n) = m.get_mut(&self.1) {
-            *n -= 1;
-            if *n == 0 {
-                m.remove(&self.1);
-            }
+        let n = m.get_mut(&self.1).expect("counted when the guard was made");
+        *n -= 1;
+        if *n == 0 {
+            m.remove(&self.1);
         }
     }
 }
