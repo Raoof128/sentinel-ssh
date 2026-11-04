@@ -25,6 +25,7 @@ Red-team hardening of observer mode. Everything below is on `main` but is not pa
 
 ### Added
 
+- **Root reach without root login.** Per-host `elevation = "sudo"` runs every remote command as root through `sudo -n -- timeout … sh -c '…'`, for hosts where `PermitRootLogin no` is the rule but the account has passwordless sudo. The tools stay read-only and root-scoped. `doctor --connect` proves uid 0 (`host.<id>.elevation`). A sudo refusal is `AUTHENTICATION_FAILED` with a clear message instead of a misleading permission error. The process list hides the `sudo` wrappers. Refused for `user = "root"` and with `scope = "user"` services. Validated live on three NOPASSWD `deploy` hosts: `btmp` reads and full disk usage now succeed where they were permission-denied.
 - `max_pending_per_host` budget (default 32).
 - MCP `isError` on failed, cancelled and outcome-unknown results.
 - Client cancellation (`notifications/cancelled`) and batch cancellation reach the operations they started.
@@ -39,6 +40,7 @@ Red-team hardening of observer mode. Everything below is on `main` but is not pa
 
 ### Changed
 
+- `scripts/check.sh`: the flag-literal scan never ran. `find -exec` replaced the `{}` inside its awk regex with a file name, awk failed, and the gate passed on empty output. The program now goes through a variable, and an awk failure fails the gate.
 - Every budget is range-checked at load.
 - Relative paths are limited to 4096 bytes, and 255 bytes per component.
 - Local tools take a scheduler slot (operation get and cancel excepted).

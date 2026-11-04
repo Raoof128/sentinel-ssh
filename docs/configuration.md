@@ -94,6 +94,7 @@ v0.1 serves one local principal over stdio.
 | `address` | yes | Hostname or IP. Must not start with `-` or contain whitespace, `@` or `%` (each could change the meaning of the `ssh` command line). |
 | `port` | no | Default `22`. |
 | `user` | yes | The SSH account. Must not start with `-` or contain whitespace or `@`. |
+| `elevation` | no | `none` (default) or `sudo`. With `sudo`, every remote command runs as root through `sudo -n` after login, for hosts where root login is disabled but `user` has passwordless sudo. Refused for `user = "root"` and alongside any `scope = "user"` service. See [Running as root](operations.md#running-as-root). |
 | `host_key` | yes | `"<type> <base64>"`, exactly two fields. Types: `ssh-ed25519`, `ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384`, `ecdsa-sha2-nistp521`, `ssh-rsa`. The algorithm name embedded in the key body must match the declared type. |
 | `auth` | yes | See below. |
 | `roots`, `services`, `log_sources`, `health_checks` | no | Tables keyed by alias or id. Anything not registered is unreachable. |
