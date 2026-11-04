@@ -128,3 +128,40 @@ fn connect_failure_details_are_escaped() {
     assert!(!c.ok);
     assert!(!c.detail.contains('\u{1b}') && c.detail.contains("\\u{1B}"), "{:?}", c.detail);
 }
+
+/// `elevation = "sudo"`: `--connect` also proves the commands really run as uid 0, and names a sudo refusal.
+#[test]
+fn connect_proves_elevation_to_root() {
+    let f = fx();
+    let elevate = |t: String| {
+        t.replace("[hosts.services.worker]\nunit = \"worker.service\"\nscope = \"user\"\n", "")
+            .replace("user = \"sentinel-observer\"", "user = \"deploy\"\nelevation = \"sudo\"")
+    };
+    let run = |body: &str| {
+        let bin = fake_ssh_script(f.dirs.state.path(), "fake-ssh", body);
+        let cfg = f.config(|t| elevate(t).replace("ssh_binary = \"/usr/bin/ssh\"", &format!("ssh_binary = \"{}\"", bin.display())));
+        run_doctor(&cfg, true)
+    };
+    // Root under sudo.
+    let r = run(r#"case "$*" in *"sudo -n"*/proc/self*) echo 0;; esac; exit 0"#);
+    assert!(check(&r, "host.h1.connect").ok);
+    let c = check(&r, "host.h1.elevation");
+    assert!(c.ok && c.detail.contains("uid 0"), "{c:?}");
+    // sudo wants a password: the connect check fails and says why.
+    let r = run("echo 'sudo: a password is required' >&2; exit 1");
+    let c = check(&r, "host.h1.connect");
+    assert!(!c.ok && c.detail.contains("AuthenticationFailed"), "{c:?}");
+    assert!(r.checks.iter().all(|c| c.name != "host.h1.elevation"));
+    // Connected, but only the probe is refused (sudoers allows some commands).
+    let r = run(r#"case "$*" in */proc/self*) echo 'sudo-rs: interactive authentication is required' >&2; exit 1;; esac; exit 0"#);
+    let c = check(&r, "host.h1.elevation");
+    assert!(!c.ok && c.detail.contains("passwordless sudo"), "{c:?}");
+    // Not root after all.
+    let r = run(r#"case "$*" in */proc/self*) echo 1000;; esac; exit 0"#);
+    let c = check(&r, "host.h1.elevation");
+    assert!(!c.ok && c.detail.contains("got '1000'"), "{c:?}");
+    // The client vanishes between the two checks.
+    let r = run(r#"case "$*" in *"export LC_ALL; true'"*) rm -f "$0";; esac; exit 0"#);
+    let c = check(&r, "host.h1.elevation");
+    assert!(!c.ok && c.detail.contains("ConnectionFailed"), "{c:?}");
+}

@@ -19,7 +19,7 @@ use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{AuthConfig, GatewaySettings, HostConfig, check_private_file, check_trusted_executable, ensure_private_dir};
+use crate::config::{AuthConfig, Elevation, GatewaySettings, HostConfig, check_private_file, check_trusted_executable, ensure_private_dir};
 use crate::ssh::backend::{BackendCapabilities, ExitKind, RunBudget, RunOutcome, SshBackend, StreamBudget, StreamOutcome};
 use crate::ssh::command::RemoteCommand;
 
@@ -273,13 +273,17 @@ impl OpenSshBackend {
         a.push(host.address.clone().into());
         // GNU stat %F and every error message we classify are translated under other locales.
         let secs = limit.as_secs() + u64::from(limit.subsec_nanos() > 0);
-        a.push(
-            format!(
-                "LC_ALL=C; export LC_ALL; exec timeout -k 5 {secs} sh -c {}",
-                sentinel_core::scope::shell_quote(&cmd.render())
-            )
-            .into(),
-        );
+        let quote = sentinel_core::scope::shell_quote;
+        let remote = match host.elevation {
+            Elevation::None => format!("LC_ALL=C; export LC_ALL; exec timeout -k 5 {secs} sh -c {}", quote(&cmd.render())),
+            // `timeout` runs inside sudo, as root, so it can still kill the whole root process group. The locale is set
+            // again inside: sudo may reset the environment. `-n` turns a password prompt into an immediate failure.
+            Elevation::Sudo => format!(
+                "LC_ALL=C; export LC_ALL; exec sudo -n -- timeout -k 5 {secs} sh -c {}",
+                quote(&format!("LC_ALL=C; export LC_ALL; {}", cmd.render()))
+            ),
+        };
+        a.push(remote.into());
         a
     }
 

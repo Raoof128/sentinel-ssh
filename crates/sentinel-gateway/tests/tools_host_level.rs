@@ -634,6 +634,54 @@ async fn process_list_hides_the_gateways_own_processes() {
     );
 }
 
+/// `elevation = "sudo"` adds `sudo` (and with use_pty a second `sudo` monitor) between `timeout` and the session.
+#[tokio::test]
+async fn process_list_hides_the_sudo_wrappers_of_an_elevated_call() {
+    let out = b"4242\n--SENTINEL--\n\
+  1 0 root 0.0 0.1 5000 systemd /sbin/init\n\
+101 100 deploy 0.0 0.1 400 sshd-session sshd: deploy@notty\n\
+102 101 root 0.0 0.0 1 sudo sudo -n -- timeout -k 5 30 sh -c x\n\
+103 102 root 0.0 0.0 1 sudo sudo -n -- timeout -k 5 30 sh -c x\n\
+104 103 root 0.0 0.0 1 timeout timeout -k 5 30 sh -c x\n\
+4242 104 root 0.0 0.0 1 sh sh -c x\n\
+4243 4242 root 0.0 0.0 1 ps ps -eo pid=\n\
+600 1 root 0.0 0.0 1 sudo sudo -u www true\n"
+        .to_vec();
+    let e = ssh_process_list(&ctx_with(FakeBackend::new().on("ps -eo", out)), ps("h1"))
+        .await
+        .unwrap();
+    let pids: Vec<u32> = e.data.processes.iter().map(|p| p.pid).collect();
+    // The host's own unrelated sudo stays visible.
+    assert_eq!(pids, [1, 600]);
+}
+
+/// A sudo refusal on an elevated host is a typed authentication failure, not a confusing empty or remote failure.
+#[tokio::test]
+async fn sudo_refusal_on_an_elevated_host_is_authentication_failed() {
+    use sentinel_gateway::config::Elevation;
+    use sentinel_gateway::tools::AppContext;
+    use sentinel_testkit::configs::{TestDirs, load_minimal};
+    use std::sync::Arc;
+    let refuse = || {
+        FakeBackend::new().on_script(Script {
+            matches: "uname".into(),
+            stderr: b"sudo: a password is required\n".to_vec(),
+            exit: 1,
+            ..Script::default()
+        })
+    };
+    let dirs = TestDirs::new();
+    let (mut cfg, _) = load_minimal(&dirs);
+    cfg.hosts[0].elevation = Elevation::Sudo;
+    let ctx = AppContext::new(cfg, Arc::new(refuse())).unwrap();
+    let e = ssh_host_inspect(&ctx, inspect("h1")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::AuthenticationFailed);
+    assert!(e.message.contains("passwordless sudo"), "{e:?}");
+    // The same text from a host that does not elevate is not a sudo refusal.
+    let e = ssh_host_inspect(&ctx_with(refuse()), inspect("h1")).await.unwrap_err();
+    assert_ne!(e.code, ErrorCode::AuthenticationFailed);
+}
+
 /// Docs fact-check: the service_active observation is remote text like any other.
 #[tokio::test]
 async fn service_active_observation_is_escaped_and_untrusted() {
