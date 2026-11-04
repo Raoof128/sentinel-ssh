@@ -48,7 +48,14 @@ git ls-files | grep -E '(^|/)(id_[a-z0-9]+|.*\.pem|.*\.key)$' && fail "key file 
 
 step "no NUL bytes or shell metacharacters smuggled into remote flag literals"
 # Production code only: each file is scanned up to its #[cfg(test)] module (tests deliberately feed bad literals).
-BAD_FLAGS=$(find crates/sentinel-gateway/src -name '*.rs' -exec awk '/^#\[cfg\(test\)\]/{exit} /\.flag\("[^"]*[ ;|&$`<>(){}]/{print FILENAME":"FNR": "$0}' {} \;)
+# The awk program goes through a variable: `find -exec` would replace a literal `{}` inside it with the file name, and
+# an awk syntax error must fail the gate rather than read as "nothing found".
+FLAG_SCAN='/^#\[cfg\(test\)\]/{exit} /\.flag\("[^"]*[ ;|&$`<>(){}]/{print FILENAME":"FNR": "$0}'
+BAD_FLAGS=""
+for f in $(find crates/sentinel-gateway/src -name '*.rs'); do
+  out=$(awk "$FLAG_SCAN" "$f") || fail "flag literal scan could not run on $f"
+  BAD_FLAGS="$BAD_FLAGS$out"
+done
 [ -z "$BAD_FLAGS" ] || { printf '%s\n' "$BAD_FLAGS"; fail "unsafe flag literal"; }
 
 step "tool contract docs are current"

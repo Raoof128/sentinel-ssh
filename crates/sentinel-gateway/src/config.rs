@@ -182,6 +182,17 @@ pub enum AuthConfig {
     },
 }
 
+/// Privilege elevation on the host (see [`HostConfig::elevation`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Elevation {
+    /// Commands run as the login account.
+    #[default]
+    None,
+    /// Commands run as root through `sudo -n` (non-interactive: a password prompt is a failure, never a hang).
+    Sudo,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RootConfig {
@@ -234,6 +245,10 @@ pub struct HostConfig {
     #[serde(default = "default_port")]
     pub port: u16,
     pub user: String,
+    /// How remote commands gain privilege after login. `sudo` runs every command through `sudo -n` as root, for hosts
+    /// where root login is disabled but the account has passwordless sudo. The tools stay read-only either way.
+    #[serde(default)]
+    pub elevation: Elevation,
     pub host_key: HostKey,
     pub auth: AuthConfig,
     #[serde(default)]
@@ -534,6 +549,18 @@ pub fn load_config(path: &Path) -> Result<Config> {
         }
         if h.user.is_empty() || h.user.starts_with('-') || h.user.chars().any(|c| c.is_whitespace() || c == '@') {
             return Err(invalid(format!("host '{}': invalid user", h.id)));
+        }
+        if h.elevation == Elevation::Sudo {
+            if h.user == "root" {
+                return Err(invalid(format!("host '{}': elevation = \"sudo\" is redundant for user root", h.id)));
+            }
+            // `systemctl --user` under sudo would ask root's user manager, not the login account's.
+            if let Some((id, _)) = h.services.iter().find(|(_, s)| s.scope == UnitScope::User) {
+                return Err(invalid(format!(
+                    "host '{}' service '{id}': scope = \"user\" cannot be combined with elevation = \"sudo\"",
+                    h.id
+                )));
+            }
         }
         if let AuthConfig::IdentityFile { path } = &mut h.auth {
             *path = expand_tilde(path);

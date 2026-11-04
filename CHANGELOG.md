@@ -6,6 +6,14 @@ All notable changes to SentinelSSH are recorded here. The format follows [Keep a
 
 Red-team hardening of observer mode. Everything below is on `main` but is not part of the `v0.1.0` tag.
 
+### Raouf: 2026-11-05 (Australia/Sydney) — root reach via sudo elevation, gate repair, audit
+
+- **Scope:** gateway (config, OpenSSH backend, doctor, process list, error mapping), quality gate, docs.
+- **Summary:** A full audit found the root problem. Hosts that forbid root login but give the account passwordless sudo could only be inspected with that account's rights: root-only files were permission-denied and `disk_usage` was always `partial`. Added the per-host `elevation = "sudo"` (`exec sudo -n -- timeout -k 5 N sh -c '…'`). `doctor --connect` proves uid 0, a sudo refusal is `AUTHENTICATION_FAILED`, and the sudo wrappers are hidden. The audit also found that the `check.sh` flag-literal scan had never run (`find -exec` replaced the `{}` in its awk regex), and fixed it.
+- **Files changed:** `crates/sentinel-gateway/src/{config.rs, ssh/backend.rs, ssh/mod.rs, ssh/openssh.rs, tools/pipeline.rs, tools/processes.rs}`, tests `config.rs`, `doctor.rs`, `openssh_argv.rs`, `tools_host_level.rs`, `scripts/check.sh`, `docs/configuration.md`, `docs/operations.md`, `CHANGELOG.md`, `AGENT.md` (new).
+- **Verification:** `bash scripts/check.sh` full gate passed: fmt, clippy, unsafe, secrets, contracts, Docker fixture e2e and red-team suites, 100% product line coverage (3834/3834). `cargo audit`: no advisories. Live: `doctor --connect` passed on every configured host, and uid 0 was proved on the three sudo-elevated hosts. A 32-case live tool matrix passed: root reads, the observer stays denied, and traversal, unregistered roots, symlinks, unknown ids, non-export downloads and regex are all refused. Fresh Claude Code and Codex sessions both answered a server question through Sentinel alone.
+- **Follow-ups:** merge PR #1. Consider a narrow sudoers rule limited to the gateway's programs instead of blanket NOPASSWD. The process list still shows the root `systemd --user` manager and parallel-connection `sshd` sessions (cosmetic).
+
 ### Security
 
 - **Containment redesign.** File-level tools pin their targets on the host instead of checking a path and then using it. Directories are entered with `cd -P`; files are opened once on a descriptor whose real path, type and link count are checked, and only that descriptor is read. This closes symlink-swap races between check and read.
@@ -25,6 +33,7 @@ Red-team hardening of observer mode. Everything below is on `main` but is not pa
 
 ### Added
 
+- **Root reach without root login.** Per-host `elevation = "sudo"` runs every remote command as root through `sudo -n -- timeout … sh -c '…'`, for hosts where `PermitRootLogin no` is the rule but the account has passwordless sudo. The tools stay read-only and root-scoped. `doctor --connect` proves uid 0 (`host.<id>.elevation`). A sudo refusal is `AUTHENTICATION_FAILED` with a clear message instead of a misleading permission error. The process list hides the `sudo` wrappers. Refused for `user = "root"` and with `scope = "user"` services. Validated live on three NOPASSWD `deploy` hosts: `btmp` reads and full disk usage now succeed where they were permission-denied.
 - `max_pending_per_host` budget (default 32).
 - MCP `isError` on failed, cancelled and outcome-unknown results.
 - Client cancellation (`notifications/cancelled`) and batch cancellation reach the operations they started.
@@ -39,6 +48,7 @@ Red-team hardening of observer mode. Everything below is on `main` but is not pa
 
 ### Changed
 
+- `scripts/check.sh`: the flag-literal scan never ran. `find -exec` replaced the `{}` inside its awk regex with a file name, awk failed, and the gate passed on empty output. The program now goes through a variable, and an awk failure fails the gate.
 - Every budget is range-checked at load.
 - Relative paths are limited to 4096 bytes, and 255 bytes per component.
 - Local tools take a scheduler slot (operation get and cancel excepted).

@@ -15,7 +15,7 @@ use sentinel_core::scope::ScopedPath;
 
 use crate::config::HostConfig;
 use crate::jobs::operations::RunningOp;
-use crate::ssh::backend::{ExitKind, RunBudget, RunOutcome, classify_ssh_failure};
+use crate::ssh::backend::{ELEVATION_REFUSED, ExitKind, RunBudget, RunOutcome, classify_ssh_failure, elevation_refused};
 use crate::ssh::command::{
     EXCLUDED, EXCLUDED_EXIT, HARDLINK, HARDLINK_EXIT, KIND_MISMATCH, KIND_MISMATCH_EXIT, MISSING, MISSING_EXIT, NESTED_EXCLUDED,
     NESTED_EXCLUDED_EXIT, NO_ACCESS, NO_ACCESS_EXIT, Pin, ROOT_MISSING, ROOT_MISSING_EXIT, RemoteCommand, SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT,
@@ -189,6 +189,10 @@ impl ToolRun {
     /// Dispatches `cmd` and applies [`classify_remote`]. Non-zero exits that are not refusals are returned for the caller.
     pub async fn run(&self, cmd: &RemoteCommand) -> Result<RunOutcome> {
         let out = self.ctx.backend.run(&self.host, cmd, &self.budget, self.op.cancel.clone()).await?;
+        if elevation_refused(&self.host, &out.exit, &out.stderr) {
+            tracing::warn!(stderr = %first_line(&out.stderr), "sudo refused the command");
+            return Err(SentinelError::new(ErrorCode::AuthenticationFailed, ELEVATION_REFUSED));
+        }
         classify_remote(cmd, &out)?;
         if out.stdout_truncated {
             self.warn(REMOTE_OUTPUT_TRUNCATED);

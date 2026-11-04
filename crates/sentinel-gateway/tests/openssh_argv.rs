@@ -72,6 +72,24 @@ fn argv_is_fully_controlled() {
     insta::assert_debug_snapshot!(s);
 }
 
+/// `elevation = "sudo"`: the contained command runs as root behind `sudo -n`, with `timeout` inside so it can still kill
+/// the root process group, and the locale set again after sudo's environment reset.
+#[test]
+fn elevated_hosts_wrap_the_command_in_sudo_n() {
+    let (_dirs, cfg) = setup();
+    let b = OpenSshBackend::new(&cfg.gateway).unwrap();
+    let mut h = host(&cfg);
+    h.elevation = sentinel_gateway::config::Elevation::Sudo;
+    let argv = b.build_argv(&h, &RemoteCommand::new("true"), Duration::from_millis(1500));
+    assert_eq!(
+        argv.last().unwrap().to_string_lossy(),
+        "LC_ALL=C; export LC_ALL; exec sudo -n -- timeout -k 5 2 sh -c 'LC_ALL=C; export LC_ALL; true'"
+    );
+    // Everything before the remote command is unchanged: same account, same pins.
+    let plain = b.build_argv(&host(&cfg), &RemoteCommand::new("true"), Duration::from_millis(1500));
+    assert_eq!(argv[..argv.len() - 1], plain[..plain.len() - 1]);
+}
+
 #[test]
 fn known_hosts_uses_alias() {
     let (_dirs, cfg) = setup();

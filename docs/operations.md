@@ -84,10 +84,28 @@ To undo: delete the key's line from `authorized_keys`, `userdel -r sentinel-obse
 
 If you choose it, use a dedicated root key per host marked `restrict`, keep registered roots as narrow as before, and prefer it only for hosts you could rebuild. A targeted alternative is to grant the unprivileged observer read access to the specific root-only files you need (for example group membership or an ACL).
 
+### Root without root login: `elevation = "sudo"`
+
+Where `PermitRootLogin no` is the rule, log in as an account with passwordless sudo and set `elevation = "sudo"` on the host. The gateway then sends
+
+```sh
+LC_ALL=C; export LC_ALL; exec sudo -n -- timeout -k 5 <secs> sh -c '<the contained command>'
+```
+
+so the same read-only, root-scoped commands run as uid 0. `-n` makes a password prompt an immediate failure, never a hang; `timeout` runs inside sudo so it can still kill the root process group.
+
+- **Verify:** `sentinel-ssh doctor --connect` adds `host.<id>.elevation`, which passes only when the commands really run as uid 0.
+- **A sudo refusal** (password required, command not allowed, `requiretty`) comes back as `AUTHENTICATION_FAILED` with the message "privilege elevation failed: sudo -n refused the configured account".
+- **Audit trail:** every call is a sudo invocation, so expect a `sudo:` line (with the full command) in the host's `auth.log` or journal per call. That is useful evidence, and also log volume.
+- **Not allowed with** `user = "root"` (redundant) or a `scope = "user"` service (`systemctl --user` would ask root's manager, not the account's).
+- **The same risk as root mode:** a NOPASSWD sudo key is root-equivalent. A narrower option is a sudoers rule limited to the read-only programs the gateway runs (see `PROGRAMS` in `ssh/command.rs`, plus `sh`, `timeout`, `realpath`, `readlink`); `doctor` reports if it is too narrow.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| `privilege elevation failed: sudo -n refused the configured account` | `elevation = "sudo"` but the account needs a password, is not in sudoers, or sudoers has `requiretty` | Grant `NOPASSWD` for the account, or remove `elevation`. Re-run `doctor --connect`. |
+| `the SSH account cannot read this path (permission denied)` on a host where you have sudo | The host does not elevate | Add `elevation = "sudo"` to the host, or connect as root. |
 | `config file ... must be mode 0600` | The config is group or world readable | `chmod 600` the file |
 | `... must be owned by the current user` | The file or directory belongs to another account | Fix ownership, or point the setting elsewhere |
 | `ancestor ... is owned or writable by other users` | A parent directory of `artifact_dir`, `runtime_dir` or `ssh_binary` is writable by others | Tighten that directory, or move the setting under your home directory |

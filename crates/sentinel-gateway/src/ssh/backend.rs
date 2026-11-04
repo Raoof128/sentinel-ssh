@@ -11,7 +11,7 @@ use serde::Serialize;
 use tokio::io::AsyncWrite;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::HostConfig;
+use crate::config::{Elevation, HostConfig};
 use crate::ssh::command::RemoteCommand;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,4 +92,19 @@ pub fn classify_ssh_failure(exit: &ExitKind, stderr: &[u8]) -> Option<ErrorCode>
             ErrorCode::ConnectionFailed
         },
     )
+}
+
+/// The message for [`elevation_refused`]: the account's sudo rules, not the tool, refused the call.
+pub const ELEVATION_REFUSED: &str =
+    "privilege elevation failed: sudo -n refused the configured account (it needs passwordless sudo for the gateway's commands)";
+
+/// True when `sudo -n` itself refused an elevated host's command: exit status 1 with a `sudo:` (or `sudo-rs:`) message at
+/// the start of a line, before the command ran. A remote name that forges such a line can only turn a result into this
+/// refusal, never widen access.
+pub fn elevation_refused(host: &HostConfig, exit: &ExitKind, stderr: &[u8]) -> bool {
+    host.elevation == Elevation::Sudo
+        && *exit == ExitKind::Code(1)
+        && String::from_utf8_lossy(stderr)
+            .lines()
+            .any(|l| l.starts_with("sudo: ") || l.starts_with("sudo-rs: "))
 }

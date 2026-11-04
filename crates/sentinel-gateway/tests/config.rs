@@ -507,3 +507,41 @@ fn agent_auth_with_a_pinned_public_key_loads() {
         "agent public key",
     );
 }
+
+/// The worker service is `scope = "user"`, which cannot be combined with sudo; most elevation tests drop it.
+const USER_SCOPE_SERVICE: &str = "[hosts.services.worker]\nunit = \"worker.service\"\nscope = \"user\"\n";
+
+fn elevated(t: String, user: &str) -> String {
+    t.replace("user = \"sentinel-observer\"", &format!("user = \"{user}\"\nelevation = \"sudo\""))
+}
+
+#[test]
+fn elevation_defaults_to_none_and_accepts_sudo() {
+    use sentinel_gateway::config::Elevation;
+    let f = fx();
+    assert_eq!(f.load(&f.minimal()).unwrap().hosts[0].elevation, Elevation::None);
+    let cfg = f.load(&elevated(f.minimal().replace(USER_SCOPE_SERVICE, ""), "deploy")).unwrap();
+    assert_eq!(cfg.hosts[0].elevation, Elevation::Sudo);
+    let e = f
+        .load(
+            &f.minimal()
+                .replace("user = \"sentinel-observer\"", "user = \"deploy\"\nelevation = \"su\""),
+        )
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::ConfigInvalid);
+}
+
+#[test]
+fn elevation_sudo_is_refused_for_root_and_user_scope_services() {
+    let f = fx();
+    let e = f.load(&elevated(f.minimal().replace(USER_SCOPE_SERVICE, ""), "root")).unwrap_err();
+    assert!(
+        e.code == ErrorCode::ConfigInvalid && e.message.contains("redundant for user root"),
+        "{e:?}"
+    );
+    let e = f.load(&elevated(f.minimal(), "deploy")).unwrap_err();
+    assert!(
+        e.code == ErrorCode::ConfigInvalid && e.message.contains("service 'worker'"),
+        "{e:?}"
+    );
+}

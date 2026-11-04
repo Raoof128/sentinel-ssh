@@ -221,7 +221,7 @@ fn redact_flag_values(s: &str, keyword_flag: &Regex) -> String {
 const OWN_PROCESS_SLACK: u64 = 16;
 
 /// Drops the gateway's own processes (red team L2): the remote shell and everything it started (`ps`, `head`), the
-/// `timeout` wrapper above it, and the session's sshd with every channel under it (other gateway commands sharing the
+/// `timeout` and `sudo` wrappers above it, and the session's sshd with every channel under it (other gateway commands sharing the
 /// multiplexed connection). The walk up stops at anything else, so the host's own processes are never swept in.
 fn without_own(procs: Vec<ProcessSummary>, shell: u32) -> Vec<ProcessSummary> {
     let by_pid: HashMap<u32, &ProcessSummary> = procs.iter().map(|p| (p.pid, p)).collect();
@@ -229,7 +229,9 @@ fn without_own(procs: Vec<ProcessSummary>, shell: u32) -> Vec<ProcessSummary> {
     let mut own: HashSet<u32> = HashSet::from([shell]);
     let mut cur = by_pid.get(&shell).map(|p| p.ppid);
     while let Some(parent) = cur.and_then(|pid| by_pid.get(&pid)) {
-        if parent.command == "timeout" {
+        // `sudo` sits between `timeout` and the session on hosts with `elevation = "sudo"` (sudo-rs and classic sudo
+        // with `use_pty` add a second `sudo` monitor).
+        if parent.command == "timeout" || parent.command == "sudo" {
             own.insert(parent.pid);
             cur = Some(parent.ppid);
         } else {
