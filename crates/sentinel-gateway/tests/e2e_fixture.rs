@@ -398,3 +398,47 @@ async fn e2e_unreadable_paths_are_errors() {
     };
     assert_eq!(ssh_logs_search(c, direct).await.unwrap_err().code, ErrorCode::RemoteFailure);
 }
+
+/// A file named `-`, `--help` or `-rf` is an ordinary file. GNU `stat` reads the operand `-` as standard input even
+/// after `--`; before entry operands were written `./<name>`, `-` was refused as "not a regular file" on read and
+/// its `ssh_file_stat` described the session's stdin instead of the file.
+#[tokio::test]
+async fn e2e_files_named_like_options_or_stdin_are_ordinary_files() {
+    let fx = fixture_or_skip!();
+    let e = ctx(&fx, false);
+    let c = &e.ctx;
+    for (name, content) in [("-", "dash content\n"), ("--help", "help content\n"), ("-rf", "rf content\n")] {
+        let path = format!("odd/{name}");
+        let st = ssh_file_stat(
+            c,
+            FileStatParams {
+                host_id: "fx".into(),
+                root: "app".into(),
+                path: path.clone(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!((st.data.kind, st.data.bytes), (EntryKind::File, content.len() as u64), "{name}");
+        assert_eq!(st.data.owner, "sentinel", "{name}");
+        let r = ssh_file_read(c, read("app", &path)).await.unwrap();
+        assert_eq!(r.data.content, content, "{name}");
+        let h = ssh_file_hash(
+            c,
+            FileHashParams {
+                host_id: "fx".into(),
+                root: "app".into(),
+                path: path.clone(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let d = ssh_transfer_download(c, dl("app", &path)).await.unwrap();
+        assert_eq!((d.data.bytes, &d.data.sha256), (content.len() as u64, &h.data.digest), "{name}");
+    }
+    let l = ssh_files_list(c, list("app", "odd")).await.unwrap();
+    let names: Vec<&str> = l.data.entries.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, ["-", "--help", "-rf"]);
+}

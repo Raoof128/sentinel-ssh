@@ -102,7 +102,7 @@ async fn health_check_curl_ignores_curlrc() {
     )
     .await
     .unwrap();
-    assert!(fake.calls()[0].starts_with("curl -q -sS "), "{}", fake.calls()[0]);
+    assert!(fake.calls()[0].starts_with("curl -q -g -sS "), "{}", fake.calls()[0]);
 }
 
 /// A pinned key whose blob encodes a different algorithm is a config error, not a runtime HOST_KEY_CHANGED.

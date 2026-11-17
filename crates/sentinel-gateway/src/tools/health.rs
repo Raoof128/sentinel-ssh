@@ -80,6 +80,9 @@ pub async fn ssh_health_check(ctx: &AppContext, p: HealthCheckParams) -> Result<
                     let cmd = RemoteCommand::new("curl")
                         // -q must come first: never read the remote account's ~/.curlrc.
                         .flag("-q")
+                        // -g: the registered URL is requested once, as written. Without it curl expands `{a,b}` and
+                        // `[1-9]` in a URL into several requests.
+                        .flag("-g")
                         .flag("-sS")
                         .flag("-o")
                         .arg("/dev/null")

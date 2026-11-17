@@ -42,3 +42,7 @@ chown -R sentinel:sentinel /srv/app/utf8
 chown -h sentinel:sentinel /srv/app/nl
 # A read = false root nested inside the readable app root (red team: nested excluded roots).
 mkdir -p /srv/app/vault && printf 'VAULT-SECRET-FOR-TESTS\n' > /srv/app/vault/inner.txt && chown -R sentinel:sentinel /srv/app/vault
+# Names a careless command line would read as standard input or as an option. GNU stat treats the operand "-" as
+# stdin even after "--", so each must reach the remote utilities as "./<name>".
+mkdir -p /srv/app/odd && printf 'dash content\n' > /srv/app/odd/- && printf 'help content\n' > /srv/app/odd/--help \
+  && printf 'rf content\n' > /srv/app/odd/-rf && chown -R sentinel:sentinel /srv/app/odd

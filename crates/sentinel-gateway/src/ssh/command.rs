@@ -211,13 +211,26 @@ inside() { [ \"$2\" = / ] && return 0; case \"$1/\" in \"$2\"/*) return 0;; esac
 enter() { cd -P -- \"$1\" 2>/dev/null && return 0; [ -e \"$1\" ] || deny SENTINEL_MISSING 91; \
 [ -d \"$1\" ] && deny SENTINEL_NO_ACCESS 92; deny SENTINEL_KIND_MISMATCH 97; }; ";
 
-/// The name a [`Pin::Entry`] or [`Pin::File`] command uses for its target: the last path component, or `.` for the root.
+/// The name of a [`Pin::Entry`] or [`Pin::File`] target in its pinned directory: the last path component, or `.` for
+/// the root. Commands take it as an operand through [`entry_operand`], never bare.
 pub fn entry_name(root: &str, target: &str) -> String {
     if target == root {
         ".".to_owned()
     } else {
         target.rsplit('/').next().unwrap_or(".").to_owned()
     }
+}
+
+/// A name in the working directory, written as a command operand. GNU `stat` reads standard input when an operand is
+/// exactly `-`, even after `--`, so a file named `-` would have its type checked against the session's stdin and not
+/// against the file. Every such operand is written `./<name>`, which also keeps it from ever starting with `-`.
+fn operand(name: &str) -> String {
+    if name == "." { ".".to_owned() } else { format!("./{name}") }
+}
+
+/// The operand a [`Pin::Entry`] or [`Pin::File`] command uses for its target: `./<last component>`, or `.` for the root.
+pub fn entry_operand(root: &str, target: &str) -> String {
+    operand(&entry_name(root, target))
 }
 
 fn deny(token: &str, code: i32) -> String {
@@ -312,7 +325,7 @@ pub fn contained(root: &str, target: &str, pin: Pin, excluded: &[String], main: 
         _ => {}
     }
     if pin == Pin::File {
-        let e = shell_quote(entry.as_deref().unwrap_or("."));
+        let e = shell_quote(&operand(entry.as_deref().unwrap_or(".")));
         p.push_str(&format!(
             "case \"$(stat -c %F -- {e})\" in \"regular file\"|\"regular empty file\") ;; *) {};; esac; exec 3< {e}; ",
             deny(KIND_MISMATCH, KIND_MISMATCH_EXIT),
@@ -378,7 +391,7 @@ pub fn exact_file(path: &str, main: RemoteCommand) -> RemoteCommand {
          case \"$(stat -c %F -- {n})\" in \"regular file\"|\"regular empty file\") ;; *) {k};; esac; \
          exec 3< {n}; {fd}[ \"$f\" = {full} ] || {s}; {one}{fd}[ \"$f\" = {full} ] || {s}; ",
         d = shell_quote(dir),
-        n = shell_quote(name),
+        n = shell_quote(&operand(name)),
         full = shell_quote(path),
         k = deny(KIND_MISMATCH, KIND_MISMATCH_EXIT),
         s = deny(SCOPE_ESCAPE, SCOPE_ESCAPE_EXIT),
@@ -494,9 +507,30 @@ mod tests {
         let c = contained("/srv/app", "/srv/app/a/b", Pin::File, &[], RemoteCommand::new("cat").stdin_fd3()).render();
         assert!(c.contains("r=$(rp '/srv/app')"), "{c}");
         assert!(c.contains("enter '/srv/app/a'; w=$(rp .)"), "{c}");
-        assert!(c.contains("exec 3< 'b'; l=$(readlink /dev/fd/3 && echo x)"), "{c}");
+        assert!(c.contains("stat -c %F -- './b'"), "{c}");
+        assert!(c.contains("exec 3< './b'; l=$(readlink /dev/fd/3 && echo x)"), "{c}");
         assert!(c.contains("\"regular file|1\"|\"regular empty file|1\")"), "{c}");
         assert!(c.ends_with("cat <&3"), "{c}");
+    }
+
+    /// GNU `stat` treats the operand `-` as standard input, even after `--`. A file named `-` (or `--help`) must reach
+    /// `stat` and the shell's `<` as a path, or its type would be read from the session's stdin instead of the file.
+    #[test]
+    fn a_file_named_dash_is_an_operand_never_stdin_or_an_option() {
+        for name in ["-", "--", "-rf", "--help"] {
+            let target = format!("/srv/app/{name}");
+            let file = contained("/srv/app", &target, Pin::File, &[], RemoteCommand::new("cat").stdin_fd3()).render();
+            assert!(file.contains(&format!("stat -c %F -- './{name}'")), "{file}");
+            assert!(file.contains(&format!("exec 3< './{name}'; ")), "{file}");
+            assert!(!file.contains(&format!(" '{name}'")), "bare operand in {file}");
+            assert_eq!(entry_operand("/srv/app", &target), format!("./{name}"));
+            // The exclusion check compares real paths, so it keeps the plain name.
+            let entry = contained("/srv/app", &target, Pin::Entry, &["/srv/x".into()], RemoteCommand::new("true")).render();
+            assert!(entry.contains(&format!("e=\"$w\"/'{name}'; ")), "{entry}");
+        }
+        let log = exact_file("/var/log/-", RemoteCommand::new("cat").stdin_fd3()).render();
+        assert!(log.contains("stat -c %F -- './-'") && log.contains("exec 3< './-'; "), "{log}");
+        assert!(log.contains("[ \"$f\" = '/var/log/-' ]"), "{log}");
     }
 
     #[test]
@@ -520,6 +554,8 @@ mod tests {
     fn the_root_itself_is_its_own_entry() {
         assert_eq!(entry_name("/srv/app", "/srv/app"), ".");
         assert_eq!(entry_name("/srv/app", "/srv/app/a/b"), "b");
+        assert_eq!(entry_operand("/srv/app", "/srv/app"), ".");
+        assert_eq!(entry_operand("/srv/app", "/srv/app/a/b"), "./b");
         let c = contained("/srv/app", "/srv/app", Pin::Entry, &[], RemoteCommand::new("stat").arg(".")).render();
         assert!(c.contains("enter '/srv/app';"), "{c}");
     }
