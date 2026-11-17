@@ -117,4 +117,4 @@ Security issues: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CO
 
 ## Licence
 
-No licence has been chosen yet. Until one is, all rights are reserved: you may read the code, but you have no right to use, modify or redistribute it.
+SentinelSSH is released under the [Apache License 2.0](LICENSE).

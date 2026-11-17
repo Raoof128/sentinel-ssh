@@ -80,7 +80,7 @@ Responsibilities: `sentinel-core` = pure types and decisions (no Tokio, no files
 
 - [ ] **Step 1: Initialise the repository and workspace**
 
-Run in `/Users/raoof.r12/Desktop/Raouf/Sentinel`:
+Run in the new repository's directory:
 ```bash
 git init -b main
 ```
