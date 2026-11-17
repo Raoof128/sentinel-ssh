@@ -18,6 +18,14 @@ Rules for any coding agent (Claude Code, Codex, others) working in this repo. Re
 
 Newest first. Each entry uses the `Raouf:` template.
 
+### Raouf: 2026-11-17 (Australia/Sydney) — Apache-2.0 licence and a CI quick gate
+
+- **Scope:** licence, CI, docs.
+- **Summary:** The repository had no licence (`Cargo.toml` said `UNLICENSED` and the README reserved all rights) and no CI. It is now released under the Apache License 2.0: `LICENSE` holds the canonical text, the workspace manifest declares `Apache-2.0`, and the README and CONTRIBUTING say so. A GitHub Actions workflow runs the quick gate (`bash scripts/check.sh --quick`) on every push to `main` and every pull request. A developer-machine path was removed from the v0.1 plan document.
+- **Files changed:** `LICENSE` (new), `.github/workflows/ci.yml` (new), `Cargo.toml`, `README.md`, `CONTRIBUTING.md`, `docs/superpowers/plans/2026-10-18-sentinelssh-v0.1-observer.md`, `AGENT.md`, `CHANGELOG.md`.
+- **Verification:** the new workflow's quick gate on the pull request. No product code changed, so the full gate was not re-run; its last pass is the 2026-11-05 entry.
+- **Follow-ups:** CI runs the quick gate only. Running the full gate there needs the Docker sshd fixture and `cargo-llvm-cov` on the runner.
+
 ### Raouf: 2026-11-05 (Australia/Sydney) — root reach via sudo elevation, gate repair, audit
 
 - **Scope:** gateway (config, OpenSSH backend, doctor, process list, error mapping), quality gate, docs.

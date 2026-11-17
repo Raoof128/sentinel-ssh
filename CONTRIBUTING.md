@@ -6,7 +6,7 @@ Thank you for helping. SentinelSSH guards access to real servers, so changes are
 
 - For anything larger than a small fix, open an issue first to agree the approach.
 - Report security problems privately: see [SECURITY.md](SECURITY.md).
-- No licence has been chosen yet. Until one is, contributions cannot be accepted under clear terms. Please raise this in an issue before investing significant work.
+- SentinelSSH is released under the [Apache License 2.0](LICENSE). Contributions are accepted under the same licence.
 
 ## Workflow
 
