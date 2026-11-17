@@ -1060,7 +1060,7 @@ Not yet settled (needs the fixture; each is a Task 15 test): resume-after-discon
 - **Wound:** an agent operator today either hands the model a raw shell (`ssh-mcp` `exec`) or gets nothing. v0.1 removes the raw shell for the read-only 80% without asking the operator to install anything on the host.
 - **Species:** typed, policy-scoped inspection with a verified-digest download whose bytes never enter model context. Bridge MCP and `tufantunc/ssh-mcp` stream files but neither binds a remote digest to a principal-scoped artefact handle with an `Export` effect (§7.3, R02/R04). This is the one claim v0.1 must be able to defend; the e2e tests in Task 15 are its evidence.
 - **Moat:** the `SshBackend` + `kind_guard` + envelope contracts are the surface the Stage 2 broker plugs into without changing a tool's schema.
-- **Tomorrow test:** the operator's own droplet (an SSH key for it already exists in `~/.ssh`). Single blocker: creating a `sentinel-observer` account there with a dedicated key and root allow-list. That is a 10-minute operator task once Task 15 passes.
+- **Tomorrow test:** the operator's own test host. Single blocker: creating a `sentinel-observer` account there with a dedicated key and root allow-list. That is a 10-minute operator task once Task 15 passes.
 - **Honest limit, stated up front:** observer mode cannot stop a stolen `sentinel-observer` key from running `cat /etc/shadow` outside the gateway, and cannot detect a symlinked parent directory. Both are in `ssh_capabilities_get` and README. Stage 2 closes both.
 
 ## Scorecard (to re-score at v0.1.0 tag)

@@ -35,6 +35,7 @@ Giving an agent `ssh host 'any command'` gives it everything the account can do,
 | SSH | Pinned host keys, `-F /dev/null`, an explicit option set, effective-config verification, connection reuse |
 | Containment | Targets pinned on the host by `realpath` and an open descriptor; symlinks, special files and hard links refused; `..` never accepted |
 | Limits | Result, transfer, queue, concurrency, timeout and input-size budgets, all range-checked |
+| Root reach (optional) | `user = "root"`, or `elevation = "sudo"` for hosts that forbid root login. Both make the key a root credential; read the [limits](docs/security-model.md#limits-of-observer-mode) first |
 | Protocol | MCP `2026-07-28` (`server/discover`) and `2025-11-25` (`initialize`) |
 
 The full list is in the [tool reference](docs/tools.md).
@@ -43,11 +44,13 @@ The full list is in the [tool reference](docs/tools.md).
 
 You need Rust 1.97 (pinned by `rust-toolchain.toml`), OpenSSH 8.9 or newer on the gateway machine, and a Linux host with GNU userland.
 
+From a clone of this repository:
+
 ```bash
 cargo install --locked --path crates/sentinel-gateway
 ```
 
-1. On the host, create a dedicated account and give it a key used only by SentinelSSH:
+1. On the host, create a dedicated account and give it a key used only by SentinelSSH (generating the key and installing it in `authorized_keys` with `restrict` is in the [getting-started guide](docs/getting-started.md)):
    ```bash
    sudo useradd -m -s /bin/sh sentinel-observer
    ```
@@ -114,6 +117,15 @@ The [getting-started guide](docs/getting-started.md) walks through each step, an
 v0.1 is a **development release**, not a supported product. It implements the spec's observer mode. Later stages are not built yet: a protected host-side broker, approvals and changes, uploads, signed releases and an independent security review. See the [changelog](CHANGELOG.md).
 
 Security issues: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Testing
+
+There are two gates, and CI's green tick covers both:
+
+- **Quick gate** (`bash scripts/check.sh --quick`): formatting, clippy with warnings as errors, the unsafe-code, secret and flag-literal scans, tool-contract freshness, and the unit and contract tests. Without a fixture, the end-to-end and red-team suites print `skipped: no ssh fixture` and pass, so this gate says nothing about them.
+- **Full gate** (`bash scripts/check.sh`): starts a Docker sshd fixture, runs the end-to-end and red-team containment suites against it, and requires every product source line to be executed at least once. Line coverage shows the code ran, not that each behaviour is asserted.
+
+Neither gate touches a real host.
 
 ## How it was built
 

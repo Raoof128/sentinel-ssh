@@ -1,8 +1,8 @@
 name: CI
 
-# The quick gate: formatting, clippy with warnings as errors, the unsafe-code, secret and flag-literal scans,
-# the tool-contract freshness check, and the unit and contract tests. The full gate (Docker sshd fixture,
-# end-to-end and red-team suites, 100% product line coverage) is `bash scripts/check.sh` and runs locally.
+# Two jobs. The quick gate: formatting, clippy with warnings as errors, the unsafe-code, secret and
+# flag-literal scans, the tool-contract freshness check, and the unit and contract tests. The full gate:
+# the Docker sshd fixture, the end-to-end and red-team suites, and 100% product line coverage.
 
 on:
   push:
@@ -32,3 +32,24 @@ jobs:
 
       - name: Run the quick gate
         run: bash scripts/check.sh --quick
+
+  full-gate:
+    name: Full gate (fixture, e2e, red-team, coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain pinned by rust-toolchain.toml
+        run: |
+          rustup toolchain install || rustup show
+          rustup component add llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Run the full gate
+        run: bash scripts/check.sh
