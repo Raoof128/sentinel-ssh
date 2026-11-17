@@ -13,4 +13,4 @@
 | Change the code | [Development](development.md), [CONTRIBUTING](../CONTRIBUTING.md) |
 | See what changed | [CHANGELOG](../CHANGELOG.md) |
 | Report a vulnerability | [SECURITY](../SECURITY.md) |
-| Read the full product vision | [Design spec](../SentinelSSH_Comprehensive_Plan_2026-10-18.md) |
+| Read the full product vision | [Design spec](design/2026-10-18-comprehensive-plan.md) |

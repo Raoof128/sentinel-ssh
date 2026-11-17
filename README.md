@@ -107,13 +107,17 @@ The [getting-started guide](docs/getting-started.md) walks through each step, an
 | [Supported platforms](docs/supported-platforms.md) | Gateway and target-host requirements |
 | [Tool contracts](docs/tool-contracts.md) | Generated JSON Schemas for every tool |
 | [ADR-001](docs/adrs/ADR-001-interfaces-and-backend.md) | Interface and backend decisions |
-| [Design spec](SentinelSSH_Comprehensive_Plan_2026-10-18.md) | The full product vision this release implements part of |
+| [Design spec](docs/design/2026-10-18-comprehensive-plan.md) | The pre-implementation plan (18 Oct 2026); this release implements part of it |
 
 ## Project status
 
 v0.1 is a **development release**, not a supported product. It implements the spec's observer mode. Later stages are not built yet: a protected host-side broker, approvals and changes, uploads, signed releases and an independent security review. See the [changelog](CHANGELOG.md).
 
 Security issues: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## How it was built
+
+Most of the code was written with AI coding assistants (Claude Code) working under the rules in [AGENT.md](AGENT.md); those commits carry `Co-Authored-By` trailers. The pre-implementation plan was drafted with AI assistance too. The author directed the work and is responsible for it. Nothing here has been independently reviewed; the [security model](docs/security-model.md) says what is and is not guaranteed.
 
 ## Licence
 

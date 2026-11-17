@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 1.97.1 (installed), edition 2024, Tokio, rmcp 3.5.1 (features `server`, `transport-io`, `macros`, `schemars`), serde/serde_json, schemars, thiserror, clap, toml, sha2, uuid (v7), chrono, tokio-util (CancellationToken), tracing; dev: insta (schema snapshots), proptest, tempfile. OpenSSH 10.3 client on the gateway; Debian sshd in Docker for the fixture.
 
-**Spec:** `SentinelSSH_Comprehensive_Plan_2026-10-18.md` (repository root). Section references below (§) point into it. This plan implements §14 Stage 0 (trimmed to what is buildable now) and Stage 1 (v0.1) = backlog tasks T01–T04b. Stages 2–5 get their own plans.
+**Spec:** `SentinelSSH_Comprehensive_Plan_2026-10-18.md` (at the repository root when this plan was written; now `docs/design/2026-10-18-comprehensive-plan.md`). Section references below (§) point into it. This plan implements §14 Stage 0 (trimmed to what is buildable now) and Stage 1 (v0.1) = backlog tasks T01–T04b. Stages 2–5 get their own plans.
 
 ## Global Constraints
 

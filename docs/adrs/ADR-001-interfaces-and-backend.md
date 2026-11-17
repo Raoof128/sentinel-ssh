@@ -1,7 +1,7 @@
 # ADR-001: v0.1 interfaces, backend and dependencies
 
 **Status:** Accepted, 18 October 2026
-**Applies to:** SentinelSSH v0.1 (observer mode). Spec: `SentinelSSH_Comprehensive_Plan_2026-10-18.md`. Plan: `docs/superpowers/plans/2026-10-18-sentinelssh-v0.1-observer.md`.
+**Applies to:** SentinelSSH v0.1 (observer mode). Spec: `docs/design/2026-10-18-comprehensive-plan.md`. Plan: `docs/superpowers/plans/2026-10-18-sentinelssh-v0.1-observer.md`.
 
 ## Decision 1: OpenSSH is the only v0.1 backend
 

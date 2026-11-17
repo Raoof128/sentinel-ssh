@@ -18,6 +18,14 @@ Rules for any coding agent (Claude Code, Codex, others) working in this repo. Re
 
 Newest first. Each entry uses the `Raouf:` template.
 
+### Raouf: 2026-11-17b (Australia/Sydney) — design plan moved under docs, how-it-was-built note
+
+- **Scope:** docs only.
+- **Summary:** A reader's first view of the file list showed a 1,262-line plan at the repository root that says "No product has been implemented". It now lives at `docs/design/2026-10-18-comprehensive-plan.md` under a banner saying it is the pre-implementation plan and that v0.1 implements part of it. The changelog's description of the hosts used for live validation no longer names the provider or their hardening. The README gained a short "How it was built" section stating that most of the code was written with AI coding assistants.
+- **Files changed:** `docs/design/2026-10-18-comprehensive-plan.md` (moved from the root, banner added), `README.md`, `docs/README.md`, `docs/adrs/ADR-001-interfaces-and-backend.md`, `docs/superpowers/plans/2026-10-18-sentinelssh-v0.1-observer.md`, `CHANGELOG.md`, `AGENT.md`.
+- **Verification:** `git grep` finds no remaining link to the old path except the historical file tree in the v0.1 plan; the CI quick gate on the pull request. No code changed.
+- **Follow-ups:** none.
+
 ### Raouf: 2026-11-17 (Australia/Sydney) — Apache-2.0 licence and a CI quick gate
 
 - **Scope:** licence, CI, docs.
