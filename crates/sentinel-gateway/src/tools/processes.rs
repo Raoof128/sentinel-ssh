@@ -70,6 +70,7 @@ struct Redactors {
     url: Regex,
     key_like: Regex,
     mysql_p: Regex,
+    json: Regex,
 }
 
 /// Credential-ish words, matched anywhere inside a flag or variable name (`DB_PASSWORD`, `--github-token`).
@@ -87,8 +88,14 @@ fn redactors() -> &'static Redactors {
             r"(?i)([?&](?:sig|signature|x-amz-signature|x-amz-credential|x-amz-security-token|x-goog-signature|x-goog-credential|access_token|code))(=)([^&\s#]+)",
         )
         .unwrap(),
-        // Self-identifying credential formats, wherever they appear: JWTs, GitHub and Slack tokens.
-        shaped: Regex::new(r"\beyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]{4,}|\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}|\bxox[abposr]-[A-Za-z0-9-]{6,}").unwrap(),
+        // Self-identifying credential formats, wherever they appear: JWTs; GitHub, GitLab and Slack tokens; AWS access
+        // key ids; `sk-` API keys and Stripe keys; Vault tokens; a PEM private key header with whatever follows it.
+        shaped: Regex::new(concat!(
+            r"\beyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]{4,}|\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}|\bxox[abposr]-[A-Za-z0-9-]{6,}",
+            r"|\bglpat-[\w-]{16,}|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bsk-[\w-]{20,}|\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}",
+            r"|\bhv[sb]\.[\w-]{20,}|-----BEGIN[ A-Z-]*PRIVATE[ -]KEY-----\S*",
+        ))
+        .unwrap(),
         assign: Regex::new(&format!(r"(?i)([^\s=:&?]*{KW}[^\s=:&?]*)(=)([^\s&]+)")).unwrap(),
         // A whole token that is a credential-ish flag (`--db-password`, `-token`); its value is the next token.
         keyword_flag: Regex::new(&format!(r"(?i)^-{{1,2}}[\w.-]*{KW}[\w.-]*$")).unwrap(),
@@ -96,6 +103,8 @@ fn redactors() -> &'static Redactors {
         url: Regex::new(r"(://[^/\s:@]*:)\S*@").unwrap(),
         key_like: Regex::new(r"(?i)([\w-]*key[\w-]*)(=)(\S{8,})").unwrap(),
         mysql_p: Regex::new(r"(\s-p)(\S+)").unwrap(),
+        // A JSON member whose name is credential-ish: `{"password":"x"}`. The value ends at the next double quote.
+        json: Regex::new(&format!(r#"(?i)("[^"\s]*{KW}[^"\s]*"\s*:\s*")([^"]*)"#)).unwrap(),
     })
 }
 
@@ -109,6 +118,13 @@ fn keep_redacted(c: &regex::Captures) -> String {
 
 /// Best-effort redaction of credentials in a command line. It cannot catch every secret (spec §9.7); the enforceable
 /// boundary is which processes and fields are returned, not this filter. Errs towards over-redaction.
+///
+/// What it recognises: a value announced by a credential-ish name (`--db-password x`, `TOKEN=x`, `"secret":"x"`,
+/// `Authorization: …`), URL userinfo, signed-URL parameters, a few self-identifying token formats, and the password
+/// options of the programs in [`PROGRAM_SECRET_FLAGS`]. What it cannot: a secret with nothing around it that says so
+/// (a positional argument, an option with an unlisted name, an encoded blob, code passed to an interpreter), and the
+/// second and later words of a value that contained spaces, because `ps` prints arguments joined by spaces and the
+/// original boundaries are gone. `docs/security-model.md` lists these limits for operators.
 pub fn redact_args(args: &str) -> String {
     let r = redactors();
     let mut s = args.to_owned();
@@ -125,6 +141,7 @@ pub fn redact_args(args: &str) -> String {
     }
     s = r.url.replace_all(&s, format!("${{1}}{REDACTED}@")).into_owned();
     s = r.shaped.replace_all(&s, REDACTED).into_owned();
+    s = r.json.replace_all(&s, format!("${{1}}{REDACTED}")).into_owned();
     for re in [&r.bearer, &r.header, &r.single_header, &r.signed_query, &r.assign, &r.key_like] {
         s = re.replace_all(&s, keep_redacted).into_owned();
     }
@@ -164,12 +181,41 @@ fn env_style_keyword() -> &'static Regex {
     })
 }
 
-/// Flags whose value is a secret only for one program (`-p` is a port for most, a password for sshpass).
-const PROGRAM_SECRET_FLAGS: [(&str, &[&str]); 3] = [
-    ("curl", &["-u", "--user", "-U", "--proxy-user", "-E", "--cert", "--oauth2-bearer"]),
-    ("sshpass", &["-p"]),
-    ("openssl", &["-k"]),
+/// Flags whose value is a secret only for one program (`-p` is a port for most, a password for sshpass). The last
+/// field says whether the program also accepts the value in the same word (`-uadmin:pw`, `--user=admin:pw`); openssl
+/// does not, and its other options start with the same letters (`-keyout`).
+const PROGRAM_SECRET_FLAGS: [(&str, &[&str], bool); 13] = [
+    (
+        "curl",
+        &["-u", "--user", "-U", "--proxy-user", "-E", "--cert", "--oauth2-bearer"],
+        true,
+    ),
+    ("sshpass", &["-p"], true),
+    ("openssl", &["-k"], false),
+    ("redis-cli", &["-a"], false),
+    ("mongo", &["-p"], true),
+    ("mongosh", &["-p"], true),
+    ("mongodump", &["-p"], true),
+    ("mongorestore", &["-p"], true),
+    ("mongoexport", &["-p"], true),
+    ("mongoimport", &["-p"], true),
+    ("sqlcmd", &["-P"], true),
+    ("mosquitto_pub", &["-P"], true),
+    ("mosquitto_sub", &["-P"], true),
 ];
+
+/// The part of `tok` to keep when it carries one of `flags` and its value in a single word: `-u` of `-uadmin:pw`,
+/// `--user=` of `--user=admin:pw`. `None` for the bare flag (its value is the next word) and for anything else.
+fn attached_secret<'a>(tok: &'a str, flags: &[&str]) -> Option<&'a str> {
+    flags.iter().find_map(|f| {
+        let rest = tok.strip_prefix(f)?;
+        match (f.starts_with("--"), rest) {
+            (_, "") => None,
+            (true, r) => r.starts_with('=').then(|| &tok[..f.len() + 1]),
+            (false, _) => Some(&tok[..f.len()]),
+        }
+    })
+}
 
 /// Whether `tok` announces that the next token is a secret: a credential flag (`--db-password`), an exact keyword
 /// (`password:`), or an env-style name (`DB_PASSWORD`). Paths and file names (`/etc/token.d`, `auth_server.py`) never are.
@@ -192,6 +238,7 @@ fn redact_flag_values(s: &str, keyword_flag: &Regex) -> String {
     let mut redact_next = false;
     // The most recent program word seen, so `sudo curl -u x` and `env A=1 sshpass -p x` are covered too.
     let mut program_flags: &[&str] = &[];
+    let mut attached = false;
     let mut rest = s;
     while !rest.is_empty() {
         let ws = rest.len() - rest.trim_start().len();
@@ -203,14 +250,18 @@ fn redact_flag_values(s: &str, keyword_flag: &Regex) -> String {
         let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
         let tok = &rest[..end];
         rest = &rest[end..];
+        let same_word = if attached { attached_secret(tok, program_flags) } else { None };
         if redact_next {
+            out.push_str(REDACTED);
+        } else if let Some(flag) = same_word {
+            out.push_str(flag);
             out.push_str(REDACTED);
         } else {
             out.push_str(tok);
         }
         let base = tok.rsplit('/').next().unwrap_or(tok);
-        if let Some((_, flags)) = PROGRAM_SECRET_FLAGS.iter().find(|(p, _)| *p == base) {
-            program_flags = flags;
+        if let Some((_, flags, in_word)) = PROGRAM_SECRET_FLAGS.iter().find(|(p, _, _)| *p == base) {
+            (program_flags, attached) = (flags, *in_word);
         }
         redact_next = tok != REDACTED && (is_keyword_token(tok, keyword_flag) || program_flags.contains(&tok));
     }
