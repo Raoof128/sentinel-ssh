@@ -12,12 +12,6 @@ on:
 permissions:
   contents: read
 
-# Several tests write a fake `ssh` script and then execute it. On Linux, if another test thread forks
-# while that script is still open for writing, the exec fails with ETXTBSY ("Text file busy"). Running
-# each test binary on one thread removes the race; the suites take under a minute either way.
-env:
-  RUST_TEST_THREADS: "1"
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

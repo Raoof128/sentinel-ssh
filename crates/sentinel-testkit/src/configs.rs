@@ -147,12 +147,48 @@ pub fn load_minimal(dirs: &TestDirs) -> (sentinel_gateway::config::Config, std::
     )
 }
 
+/// Writes `content` to `path` as an executable file (mode 0700) that can be executed the moment this returns.
+///
+/// The file is written by a child process, never by this one. On Linux, `execve` fails with ETXTBSY ("Text file busy")
+/// while any process holds the file open for writing. Tests run on many threads, and a `fork` on another thread
+/// copies every open descriptor into its child until that child reaches `exec`; if this process opened the script
+/// for writing, such a child could still hold it after the write here had finished and closed, and the exec that
+/// follows would fail at random. Close-on-exec does not help: the window is between `fork` and `exec`. A descriptor
+/// this process never opened cannot be copied by its forks, and the writer has exited (so the kernel has closed its
+/// descriptors) before this returns.
+pub fn write_executable(path: &Path, content: &str) {
+    use std::process::{Command, Stdio};
+    let mut writer = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("umask 077 && cat > \"$1\" && chmod 700 \"$1\"")
+        .arg("write-executable")
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("start the script writer");
+    writer
+        .stdin
+        .take()
+        .expect("script writer stdin")
+        .write_all(content.as_bytes())
+        .expect("send the script to the writer");
+    // Taking stdin above dropped it, so `cat` has seen end of input.
+    let status = writer.wait().expect("wait for the script writer");
+    assert!(status.success(), "script writer failed for {}: {status}", path.display());
+}
+
 /// Writes an executable shell script (mode 0700) used as a stand-in `ssh_binary`. `ssh -G` (effective-config query)
 /// is passed through to the real `/usr/bin/ssh` so the backend's configuration check still runs against real OpenSSH.
 pub fn fake_ssh_script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
     let p = dir.join(name);
     let passthrough = "case \" $* \" in *\" -G \"*) exec /usr/bin/ssh \"$@\";; esac";
-    std::fs::write(&p, format!("#!/bin/sh\n{passthrough}\n{body}\n")).expect("write script");
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).expect("chmod script");
+    write_executable(&p, &format!("#!/bin/sh\n{passthrough}\n{body}\n"));
+    p
+}
+
+/// As [`fake_ssh_script`] without the `ssh -G` passthrough: the script answers every invocation itself.
+pub fn raw_ssh_script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+    let p = dir.join(name);
+    write_executable(&p, &format!("#!/bin/sh\n{body}\n"));
     p
 }
