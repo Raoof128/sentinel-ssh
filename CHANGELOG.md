@@ -6,6 +6,14 @@ All notable changes to SentinelSSH are recorded here. The format follows [Keep a
 
 Red-team hardening of observer mode. Everything below is on `main` but is not part of the `v0.1.0` tag.
 
+### Raouf: 2026-11-17c (Australia/Sydney) — limits of root and sudo modes; full gate in CI
+
+- **Scope:** docs, CI.
+- **Summary:** The operations guide suggested a "narrower" sudoers rule for `elevation = "sudo"`. None can exist for this design: the gateway's commands run as `sudo -n -- timeout ... sh -c '<command>'`, so any rule that lets them through permits arbitrary root commands for whoever holds the key. The sentence is replaced, and the security model lists root and sudo modes under its limits, including that the process list then returns root's process arguments. The README gains a Testing section (what the quick gate covers, that the end-to-end and red-team suites skip without a fixture, what line coverage does and does not show) and the Quick start says it needs a clone and points at the key-setup steps. CI gains a second job that runs the full gate. This supersedes the 2026-11-05 follow-up that suggested a narrow sudoers rule.
+- **Files changed:** `docs/operations.md`, `docs/security-model.md`, `README.md`, `.github/workflows/ci.yml`, `docs/superpowers/plans/2026-10-18-sentinelssh-v0.1-observer.md`, `AGENT.md`, `CHANGELOG.md`.
+- **Verification:** on pull request #4 both CI jobs passed, including the first run of the full gate on a hosted runner: Docker sshd fixture, end-to-end and red-team suites, 100% product line coverage. No product code changed.
+- **Follow-ups:** add a test that scans every rendered remote command for write-capable flags (`find -delete`, `-exec`, a non-null `curl -o`); the program allowlist is by name only.
+
 ### Raouf: 2026-11-17b (Australia/Sydney) — design plan moved under docs, how-it-was-built note
 
 - **Scope:** docs only.
