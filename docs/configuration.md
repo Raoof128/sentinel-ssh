@@ -156,7 +156,7 @@ expect_status = 200
 timeout_secs = 5
 ```
 
-The URL is fetched **from the host** with `curl` (so `127.0.0.1` means the host's own loopback). It must be `http://` or `https://` without whitespace or control characters. It must not embed credentials (`user:password@`): they would travel in the remote command line and in results. `timeout_secs` is 1–60. Results return the URL with any query and fragment replaced by `?<redacted>`.
+The URL is fetched **from the host** with `curl` (so `127.0.0.1` means the host's own loopback). It is requested once and exactly as written: `curl` runs with `-g`, so `{}` and `[]` in a URL are not expanded into several requests, with `-q`, so the account's `~/.curlrc` is not read, and without `-L`, so redirects are not followed. It must be `http://` or `https://` without whitespace or control characters. It must not embed credentials (`user:password@`): they would travel in the remote command line and in results. `timeout_secs` is 1–60. Results return the URL with any query and fragment replaced by `?<redacted>`.
 
 ```toml
 [hosts.health_checks.api_active]

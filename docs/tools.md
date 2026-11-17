@@ -103,7 +103,7 @@ Filesystem capacity plus directory usage inside a readable root.
 
 `data.processes[]`: `pid`, `ppid`, `user`, `cpu_percent`, `mem_percent`, `elapsed_seconds`, `command`, `args_redacted`. The list leaves out this call's own processes: the remote shell, the `ps` and `head` it runs, its `timeout` wrapper and the session `sshd`.
 
-Arguments pass through a **best-effort** credential filter. It covers `--password=`-style flags and assignments, keyword flags followed by a value, `Authorization`/`Cookie`/token headers, URL passwords, JWTs, GitHub and Slack tokens, signed-URL parameters, `mysql -p`, `curl -u`, `sshpass -p` and `openssl -k`. It errs toward hiding too much. It cannot catch every secret: the real boundary is which hosts and fields you expose.
+Arguments pass through a **best-effort** credential filter. It covers `--password=`-style flags and assignments, keyword flags followed by a value, JSON members with a credential-ish name, `Authorization`/`Cookie`/token headers, URL passwords, signed-URL parameters, self-identifying tokens (JWTs; GitHub, GitLab and Slack tokens; AWS access key ids; `sk-` and Stripe keys; Vault `hvs.` tokens; PEM private-key headers), and the password options of `mysql`, `curl`, `sshpass`, `openssl`, `redis-cli`, the `mongo` tools, `sqlcmd` and `mosquitto`, including the `-uuser:pw` and `--user=user:pw` forms. It errs toward hiding too much. It cannot catch every secret: a positional secret, an option with an unlisted name, an unknown token format, an encoded value, and all but the first word of a value that contained spaces pass through unchanged. The full list is in the [security model](security-model.md#limits-of-observer-mode). The real boundary is which hosts and fields you expose.
 
 ### `ssh_service_status`
 

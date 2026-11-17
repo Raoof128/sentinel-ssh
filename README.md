@@ -17,7 +17,7 @@ SentinelSSH is a local MCP server that lets an AI agent inspect Linux hosts you 
 
 Giving an agent `ssh host 'any command'` gives it everything the account can do, and puts every byte it reads into model context. SentinelSSH takes the opposite approach:
 
-- **No raw shell.** No tool runs an arbitrary command. Each tool builds its own fixed remote command, with every value shell-quoted.
+- **No raw shell.** No tool runs an arbitrary command. Each tool builds its own fixed remote command, with every string value single-quoted and every number written as digits.
 - **Names, not paths.** An agent addresses a registered *root alias* plus a relative path (`root: "app", path: "logs/api.log"`). Services, log sources and health checks are configuration ids, never unit names, file paths or URLs.
 - **Deny by default.** Every call is authorised against the configuration before anything reaches the host. Downloads need `export = true` on the root.
 - **Bytes stay out of context.** Downloads become SHA-256-verified, owner-only *artefacts*, which the agent reads by handle and range. Results are bounded, and anything larger moves to an artefact.
@@ -27,7 +27,7 @@ Giving an agent `ssh host 'any command'` gives it everything the account can do,
 
 | Area | What v0.1 provides |
 |---|---|
-| Inspection | Host facts, disk usage, process list (with credential redaction), systemd service state, registered HTTP or service health checks |
+| Inspection | Host facts, disk usage, process list (with best-effort credential redaction), systemd service state, registered HTTP or service health checks |
 | Files | Directory listing with paging, ranged reads (UTF-8 or base64), stat, SHA-256 |
 | Logs | Fixed-string search of registered log sources, optionally over the last N bytes only |
 | Transfer | Download to a verified local artefact; ranged artefact reads |
@@ -42,7 +42,7 @@ The full list is in the [tool reference](docs/tools.md).
 
 ## Quick start
 
-You need Rust 1.97 (pinned by `rust-toolchain.toml`), OpenSSH 8.9 or newer on the gateway machine, and a Linux host with GNU userland.
+You need Rust 1.97.1 (pinned by `rust-toolchain.toml`), OpenSSH 8.9 or newer on the gateway machine, and a Linux host with GNU userland.
 
 From a clone of this repository:
 
@@ -122,7 +122,7 @@ Security issues: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CO
 
 There are two gates, and CI's green tick covers both:
 
-- **Quick gate** (`bash scripts/check.sh --quick`): formatting, clippy with warnings as errors, the unsafe-code, secret and flag-literal scans, tool-contract freshness, and the unit and contract tests. Without a fixture, the end-to-end and red-team suites print `skipped: no ssh fixture` and pass, so this gate says nothing about them.
+- **Quick gate** (`bash scripts/check.sh --quick`): formatting, clippy with warnings as errors, the unsafe-code, secret and flag-literal scans, tool-contract freshness, and the unit and contract tests. One of those renders every tool's remote command with hostile inputs and checks the text: the fixed part never changes, each utility gets only its listed read-only options, and no value can be read as an option. Without a fixture, the end-to-end and red-team suites print `skipped: no ssh fixture` and pass, so this gate says nothing about them.
 - **Full gate** (`bash scripts/check.sh`): starts a Docker sshd fixture, runs the end-to-end and red-team containment suites against it, and requires every product source line to be executed at least once. Line coverage shows the code ran, not that each behaviour is asserted.
 
 Neither gate touches a real host.
