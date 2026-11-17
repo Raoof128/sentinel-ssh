@@ -98,7 +98,7 @@ so the same read-only, root-scoped commands run as uid 0. `-n` makes a password 
 - **A sudo refusal** (password required, command not allowed, `requiretty`) comes back as `AUTHENTICATION_FAILED` with the message "privilege elevation failed: sudo -n refused the configured account".
 - **Audit trail:** every call is a sudo invocation, so expect a `sudo:` line (with the full command) in the host's `auth.log` or journal per call. That is useful evidence, and also log volume.
 - **Not allowed with** `user = "root"` (redundant) or a `scope = "user"` service (`systemctl --user` would ask root's manager, not the account's).
-- **The same risk as root mode:** a NOPASSWD sudo key is root-equivalent. A narrower option is a sudoers rule limited to the read-only programs the gateway runs (see `PROGRAMS` in `ssh/command.rs`, plus `sh`, `timeout`, `realpath`, `readlink`); `doctor` reports if it is too narrow.
+- **The same risk as root mode:** a NOPASSWD sudo key is root-equivalent, and no sudoers rule can narrow that for this design. The gateway's commands run as `sudo -n -- timeout ... sh -c '<command>'`, so any rule that lets them through permits `timeout` and `sh` as root, which is an arbitrary root command for whoever holds the key. The real narrowing is the one above: keep the observer unprivileged and grant it read access to the specific files you need with a group or an ACL.
 
 ## Troubleshooting
 
