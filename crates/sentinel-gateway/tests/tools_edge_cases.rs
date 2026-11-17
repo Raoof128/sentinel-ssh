@@ -519,3 +519,91 @@ async fn disk_usage_with_unreadable_subtrees_is_partial() {
     );
     assert_eq!(e.data.content_trust, "untrusted");
 }
+
+/// Program-specific password options, in every form the program accepts: next word, same word, `--long=value`.
+#[test]
+fn redaction_covers_attached_and_long_forms_of_program_password_options() {
+    for (input, want) in [
+        ("curl -u admin:hunter2 http://x", "curl -u [REDACTED] http://x"),
+        ("curl -uadmin:hunter2 http://x", "curl -u[REDACTED] http://x"),
+        ("curl --user=admin:hunter2 http://x", "curl --user=[REDACTED] http://x"),
+        ("curl --proxy-user=p:hunter2 http://x", "curl --proxy-user=[REDACTED] http://x"),
+        ("/usr/bin/curl -Ecert.pem:hunter2 http://x", "/usr/bin/curl -E[REDACTED] http://x"),
+        ("sshpass -phunter2 ssh h", "sshpass -p[REDACTED] ssh h"),
+        ("sudo sshpass -phunter2 ssh h", "sudo sshpass -p[REDACTED] ssh h"),
+        ("redis-cli -a hunter2 ping", "redis-cli -a [REDACTED] ping"),
+        ("mongosh -u admin -p hunter2 db", "mongosh -u admin -p [REDACTED] db"),
+        ("mongodump -phunter2 --db x", "mongodump -p[REDACTED] --db x"),
+        ("sqlcmd -S srv -U sa -P hunter2", "sqlcmd -S srv -U sa -P [REDACTED]"),
+        ("mosquitto_pub -u u -P hunter2 -t x", "mosquitto_pub -u u -P [REDACTED] -t x"),
+        // Not a password option, although it starts like one.
+        ("curl --user-agent Mozilla http://x", "curl --user-agent Mozilla http://x"),
+        ("openssl req -keyout k.pem -kfile f", "openssl req -keyout k.pem -kfile f"),
+        ("mosquitto_pub -p 1883 -t x", "mosquitto_pub -p 1883 -t x"),
+        ("nginx -phunter2", "nginx -phunter2"),
+    ] {
+        assert_eq!(redact_args(input), want, "{input}");
+    }
+}
+
+#[test]
+fn redaction_covers_json_members_and_self_identifying_tokens() {
+    for (input, want) in [
+        (
+            r#"curl -d {"password":"hunter2"} http://x"#,
+            r#"curl -d {"password":"[REDACTED]"} http://x"#,
+        ),
+        (
+            r#"node app.js --config {"db_token": "hunter2","port":80}"#,
+            r#"node app.js --config {"db_token": "[REDACTED]","port":80}"#,
+        ),
+        (r#"app {"port":"80","name":"x"}"#, r#"app {"port":"80","name":"x"}"#),
+        // Split so that secret scanners (this repository's own, and the host's push protection) do not read these
+        // made-up examples as real keys.
+        (concat!("app AK", "IAIOSFODNN7EXAMPLE"), "app [REDACTED]"),
+        ("app sk-proj-abcdefghijklmnopqrstuvwxyz0123", "app [REDACTED]"),
+        (concat!("app sk_li", "ve_abcdefghijklmnopqrstuvwx"), "app [REDACTED]"),
+        (concat!("app glp", "at-abcdefghij0123456789"), "app [REDACTED]"),
+        ("vault login hvs.CAESIabcdefghijklmnopqrstuv", "vault login [REDACTED]"),
+        ("app -----BEGIN-PRIVATE-KEY-----MIIEvQ", "app [REDACTED]"),
+        (concat!("app -----BEGIN OPENSSH PRIV", "ATE KEY-----b3Blbn"), "app [REDACTED]"),
+        // Too short or not the format: left alone.
+        ("app sk-short AKIA123 task-list", "app sk-short AKIA123 task-list"),
+    ] {
+        assert_eq!(redact_args(input), want, "{input}");
+    }
+}
+
+/// What the redaction does not catch, pinned so that `docs/security-model.md` stays true. Each of these goes to the
+/// caller unchanged or only partly hidden. If one starts being redacted, move it to a test above and update the docs.
+#[test]
+fn redaction_limits_are_the_documented_ones() {
+    for (input, why) in [
+        ("myapp hunter2", "a positional secret"),
+        ("htpasswd -b /etc/x user hunter2", "a positional secret"),
+        ("smbclient //h/s hunter2 -U u", "a positional secret"),
+        ("echo hunter2", "a positional secret"),
+        ("myapp -k hunter2", "an unlisted short option"),
+        (
+            "docker login -u me -p hunter2 registry",
+            "-p is a password only for the listed programs",
+        ),
+        ("myapp --pin 1234", "an option name without a credential word"),
+        ("myapp --otp 123456", "an option name without a credential word"),
+        ("myapp --pw hunter2", "an option name without a credential word"),
+        ("myapp --license ABCD-1234-EFGH-5678", "an option name without a credential word"),
+        ("myapp --cookie session=hunter2", "an option name without a credential word"),
+        ("python -c import os;os.environ['X']='hunter2'", "code passed to an interpreter"),
+        ("base64encoded dGhpcyBpcyBhIHNlY3JldCB2YWx1ZQ==", "an encoded value"),
+        ("vault login s.hunter2hunter2hunter2", "a token format that is not recognised"),
+    ] {
+        assert_eq!(redact_args(input), input, "{why}");
+    }
+    // `ps` joins arguments with spaces: only the first word of a value that contained spaces is hidden.
+    assert_eq!(
+        redact_args("myapp --password two words here"),
+        "myapp --password [REDACTED] words here"
+    );
+    // An over-redaction: any name containing a credential word, such as `author`, hides its value.
+    assert_eq!(redact_args("git log --author=jane"), "git log --author=[REDACTED]");
+}

@@ -1,5 +1,7 @@
 # AGENT.md
 
+> **AI-assistant working document.** The rules below are instructions to coding assistants, and the log is the record they keep. For people, [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/development.md](docs/development.md) are the guides.
+
 Rules for any coding agent (Claude Code, Codex, others) working in this repo. Read this and `CHANGELOG.md` before changing anything. `CONTRIBUTING.md` and `docs/development.md` are the long form.
 
 ## Constraints
@@ -12,11 +14,26 @@ Rules for any coding agent (Claude Code, Codex, others) working in this repo. Re
 - **Regenerate `docs/tool-contracts.md`** (`bash scripts/gen-tool-contracts.sh`) when a tool schema changes, and update the docs that describe changed behaviour.
 - **The repository is public.** Never commit real host ids, addresses, users, keys or client names. The fixture uses synthetic data only.
 - **No `unsafe`, and no new dependencies without need.** Commits are small, with `feat:` / `fix:` / `test:` / `docs:` subjects. Commit or push only when the owner asks.
-- **Low disk on the dev Mac:** build lean (`CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`). Delete nothing outside `target/` without asking.
+- **Build lean when disk is short:** `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`. Delete nothing outside `target/` without asking.
 
 ## Log
 
 Newest first. Each entry uses the `Raouf:` template.
+
+### Raouf: 2026-11-17d (Australia/Sydney) — fake-ssh race fixed, rendered-command test, `-` operands, redaction limits
+
+- **Scope:** test support, tests, `ssh/command.rs`, `ssh/openssh.rs`, `tools/processes.rs`, `tools/health.rs`, CI, docs.
+- **Summary:** Closes the three follow-ups of 2026-11-17c and records an adversarial read of the command builder, the OpenSSH argv and each tool.
+  - **The "Text file busy" race is fixed at its cause.** The fake-`ssh` helpers wrote a script and the gateway executed it at once. On Linux `execve` fails with ETXTBSY while any process holds the file open for writing, and a `fork` on another test thread copies that descriptor into its child until the child reaches `exec`. `sentinel_testkit::configs::write_executable` now has a child process write the script, so the test process never holds a write descriptor that a fork could copy. `tests/openssh_argv.rs` uses the same helper. CI no longer sets `RUST_TEST_THREADS=1`.
+  - **Every tool's remote command is rendered with hostile inputs and checked as text** (`tests/rendered_commands.rs`): the fixed text is the same as for a harmless value, each utility gets only its listed read-only options, the only redirections are four known forms, and no value can be read as an option or as stdin. The checks are themselves tested against 31 bad commands.
+  - **Finding, fixed: a file named `-`.** GNU `stat` reads the operand `-` as standard input even after `--`. For a path whose last component was `-`, the type check before a read looked at the session's stdin and refused the file as "not a regular file", and `ssh_file_stat` described stdin as if it were the file. It failed closed for reads and returned a wrong answer for stat; nothing outside a root was reachable. Entry operands are now written `./<name>` (`operand`, `entry_operand`), for `contained` and for `exact_file`.
+  - **Hardening, no known attack:** `VerifyHostKeyDNS=no` and `NoHostAuthenticationForLocalhost=no` are pinned in the argv (the two client options that accept a host key outside the pinned file; both were already off by default and unreachable through `-F /dev/null`). Health checks run `curl -g`, so a registered URL is requested once, as written.
+  - **Redaction reviewed.** Added: the same-word forms of program password options (`curl -uuser:pw`, `--user=user:pw`, `sshpass -ppw`), JSON members with a credential-ish name, `redis-cli -a`, the `mongo` tools' `-p`, `sqlcmd -P`, `mosquitto -P`, and more self-identifying token formats. What it still cannot catch is listed in `docs/security-model.md` and pinned by `redaction_limits_are_the_documented_ones`.
+  - **Adversarial read, nothing else found.** Argument injection: every caller string is single-quoted and comes after `--` or as an option's argument; numbers are range-checked integers. Path escape and link races: the prologue pins by working directory and open descriptor, and the fixture's planted attacks still pass. Globbing: no unquoted expansion of a caller value. Environment: the client runs with a cleared environment; on the host only `LC_ALL` is set, and the account's `PATH` decides which utilities run, which is now stated as a limit. OpenSSH: `-F /dev/null`, forwarding, proxy and local commands off, the control socket in a 0700 directory whose identity is re-checked before every spawn.
+  - **Docs:** `AGENT.md` and the v0.1 task plan now open with a line saying they are AI-assistant working documents; the note about the developer's machine is gone. README says Rust 1.97.1, as `rust-toolchain.toml` does.
+- **Files changed:** `crates/sentinel-testkit/src/configs.rs`, `crates/sentinel-testkit/tests/script_exec_race.rs` (new), `crates/sentinel-testkit/docker/seed.sh`, `crates/sentinel-gateway/src/ssh/command.rs`, `crates/sentinel-gateway/src/ssh/openssh.rs`, `crates/sentinel-gateway/src/tools/files.rs`, `crates/sentinel-gateway/src/tools/health.rs`, `crates/sentinel-gateway/src/tools/processes.rs`, `crates/sentinel-gateway/tests/rendered_commands.rs` (new), `crates/sentinel-gateway/tests/{e2e_fixture,hardening,openssh_argv,tools_download,tools_edge_cases,tools_file_level}.rs`, `crates/sentinel-gateway/tests/snapshots/openssh_argv__argv_is_fully_controlled.snap`, `.github/workflows/ci.yml`, `README.md`, `docs/security-model.md`, `docs/tools.md`, `docs/configuration.md`, `docs/superpowers/plans/2026-10-18-sentinelssh-v0.1-observer.md`, `AGENT.md`, `CHANGELOG.md`.
+- **Verification:** in a Linux container (`rust:1.97.1-bookworm`, 4 CPUs, non-root user) the new stress test passed, the whole suite passed 5 times in a row at the default thread count (311 tests each), and the same stress test failed with "Text file busy" within a few rounds when the helper was switched back to writing in-process. `bash scripts/check.sh` passed locally against the Docker fixture: 3877/3877 product lines executed, 323 tests, including a new end-to-end test that reads, stats, hashes and downloads files named `-`, `--help` and `-rf`. Both CI jobs on the pull request.
+- **Follow-ups:** none open from this entry. The rendered-command test reads commands as text; running them in a real shell with a tracing wrapper would be a stronger form of the same check.
 
 ### Raouf: 2026-11-17c (Australia/Sydney) — limits of root and sudo modes; full gate in CI
 

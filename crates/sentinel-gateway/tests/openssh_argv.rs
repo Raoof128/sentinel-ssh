@@ -62,6 +62,8 @@ fn argv_is_fully_controlled() {
         "ControlMaster=auto",
         "BatchMode=yes",
         "ForwardAgent=no",
+        "VerifyHostKeyDNS=no",
+        "NoHostAuthenticationForLocalhost=no",
     ] {
         assert!(joined.contains(req), "{req}");
     }
@@ -415,11 +417,7 @@ fn agent_auth_disables_default_identity_files() {
 }
 
 fn raw_script(dirs: &TestDirs, body: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let p = dirs.state.path().join("raw-ssh");
-    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).unwrap();
-    p
+    sentinel_testkit::configs::raw_ssh_script(dirs.state.path(), "raw-ssh", body)
 }
 
 /// If the client cannot even report its configuration, nothing is dispatched.

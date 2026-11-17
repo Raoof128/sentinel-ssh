@@ -48,7 +48,7 @@ async fn download_round_trips_binary_without_exposing_bytes() {
     assert!(e.evidence.iter().any(|x| x.kind == "remote_digest"));
     assert!(e.evidence.iter().any(|x| x.kind == "local_digest"));
     assert!(
-        fake.calls()[1].contains("exec 3< 'blob.bin'") && fake.calls()[1].ends_with("cat <&3"),
+        fake.calls()[1].contains("exec 3< './blob.bin'") && fake.calls()[1].ends_with("cat <&3"),
         "{}",
         fake.calls()[1]
     );

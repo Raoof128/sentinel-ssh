@@ -157,7 +157,7 @@ async fn file_read_returns_range_and_eof() {
     assert_eq!(e.data.bytes_returned, 11);
     assert!(!e.data.eof);
     assert!(
-        fake.calls()[0].contains("exec 3< 'app.toml'") && fake.calls()[0].ends_with("tail -c '+1' <&3 | head -c 11"),
+        fake.calls()[0].contains("exec 3< './app.toml'") && fake.calls()[0].ends_with("tail -c '+1' <&3 | head -c 11"),
         "{}",
         fake.calls()[0]
     );

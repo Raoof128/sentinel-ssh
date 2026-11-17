@@ -1,5 +1,7 @@
 # SentinelSSH v0.1 Observer Implementation Plan
 
+> **AI-assistant working document.** This is the task plan a coding assistant followed to build v0.1, kept as a record. Lines addressed to "agentic workers" are instructions to that assistant, not to a reader. It is historical: where it differs from the code, the code and the other documents under `docs/` are correct.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship SentinelSSH v0.1: a local stdio MCP server in Rust that gives an agent 16 typed, policy-scoped, read-only inspection tools plus one verified binary download tool over native OpenSSH to pinned Linux hosts, with no arbitrary shell access.

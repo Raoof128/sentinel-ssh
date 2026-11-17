@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::mcp::results::Detail;
 use crate::ssh::backend::ExitKind;
-use crate::ssh::command::{Marker, Pin, RemoteCommand, entry_name, fd3_size_limit};
+use crate::ssh::command::{Marker, Pin, RemoteCommand, entry_operand, fd3_size_limit};
 use crate::tools::pipeline::{ToolRun, has_io_error, read_tool};
 use crate::tools::{AppContext, UNTRUSTED, bounded};
 
@@ -341,7 +341,7 @@ pub async fn ssh_file_stat(ctx: &AppContext, p: FileStatParams) -> Result<Result
                 .flag("-c")
                 .arg("%F|%s|%a|%U|%G|%Y|%h")
                 .flag("--")
-                .arg(&entry_name(&target.root_path, &target.absolute));
+                .arg(&entry_operand(&target.root_path, &target.absolute));
             let out = run.run_pinned(Pin::Entry, &target, Effect::Read, stat_cmd).await?;
             if out.exit != ExitKind::Code(0) {
                 return Err(not_found_or_failure(&out.stderr));

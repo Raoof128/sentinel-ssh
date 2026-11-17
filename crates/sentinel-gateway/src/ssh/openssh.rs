@@ -226,6 +226,11 @@ impl OpenSshBackend {
         opt(format!("HostKeyAlias={}", host.id));
         opt("CheckHostIP=no".into());
         opt("UpdateHostKeys=no".into());
+        // The two client options that accept a host key that is not in the pinned file: a DNS (SSHFP) match, and any
+        // key at all for a loopback address. Both default to off; they are pinned so that no build default or patched
+        // client can turn them on.
+        opt("VerifyHostKeyDNS=no".into());
+        opt("NoHostAuthenticationForLocalhost=no".into());
         opt(format!("ConnectTimeout={}", self.connect_timeout_secs));
         opt("ServerAliveInterval=15".into());
         opt("ServerAliveCountMax=2".into());
