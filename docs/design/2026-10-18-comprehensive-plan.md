@@ -1,5 +1,7 @@
 # SentinelSSH: Comprehensive Product and Engineering Plan
 
+> **Historical document.** This is the pre-implementation plan written on 18 October 2026, before any code existed, and it is kept unchanged as the design record. v0.1 implements the observer-mode subset of it (17 tools, where this plan proposed 16 to start). For what exists today, read the [README](../../README.md) and the [changelog](../../CHANGELOG.md).
+
 **Prepared for:** Raouf  
 **Research checked:** 18 October 2026, Australia/Sydney  
 **Status:** Proposed design and staged implementation plan. No product has been implemented or benchmarked in this review.  

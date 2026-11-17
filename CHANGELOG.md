@@ -6,6 +6,14 @@ All notable changes to SentinelSSH are recorded here. The format follows [Keep a
 
 Red-team hardening of observer mode. Everything below is on `main` but is not part of the `v0.1.0` tag.
 
+### Raouf: 2026-11-17b (Australia/Sydney) — design plan moved under docs, how-it-was-built note
+
+- **Scope:** docs only.
+- **Summary:** A reader's first view of the file list showed a 1,262-line plan at the repository root that says "No product has been implemented". It now lives at `docs/design/2026-10-18-comprehensive-plan.md` under a banner saying it is the pre-implementation plan and that v0.1 implements part of it. The changelog's description of the hosts used for live validation no longer names the provider or their hardening. The README gained a short "How it was built" section stating that most of the code was written with AI coding assistants.
+- **Files changed:** `docs/design/2026-10-18-comprehensive-plan.md` (moved from the root, banner added), `README.md`, `docs/README.md`, `docs/adrs/ADR-001-interfaces-and-backend.md`, `docs/superpowers/plans/2026-10-18-sentinelssh-v0.1-observer.md`, `CHANGELOG.md`, `AGENT.md`.
+- **Verification:** `git grep` finds no remaining link to the old path except the historical file tree in the v0.1 plan; the CI quick gate on the pull request. No code changed.
+- **Follow-ups:** none.
+
 ### Raouf: 2026-11-17 (Australia/Sydney) — Apache-2.0 licence and a CI quick gate
 
 - **Scope:** licence, CI, docs.
@@ -52,7 +60,7 @@ Red-team hardening of observer mode. Everything below is on `main` but is not pa
 - An end-to-end red-team suite against the Docker fixture, including a live swap-race attacker.
 - Full documentation set under `docs/`, plus `SECURITY.md` and `CONTRIBUTING.md`.
 - Operations guide: onboarding a host safely (key pinning, per-host `restrict` keys, the `AllowUsers` drop-in with a held-session reload) and the trade-offs of running as root.
-- Validated against six live hosts (three DigitalOcean droplets in observer then root mode, a fourth droplet, and two hardened `AllowUsers` VPN nodes): `doctor --connect` and live read-only and refusal calls passed on all of them.
+- Validated against six live hosts, in observer mode and in root mode: `doctor --connect` and live read-only and refusal calls passed on all of them.
 
 ### Changed
 
